@@ -430,36 +430,13 @@ fn change_number(value: &mut String, delta: i16, minimum: i16, maximum: i16) {
 
 /// Render the editor and its dirty-cancel confirmation.
 pub fn render(frame: &mut Frame<'_>, area: Rect, state: &EditorState) {
-    let title = match state.mode {
-        EditorMode::Add => " Add Chore ",
-        EditorMode::Edit(_) => " Edit Chore — recurrence effective today ",
-    };
+    let title = editor_title(state.mode);
     let recurrence = match state.values.recurrence {
         RecurrenceChoice::Weekly => "Weekly",
         RecurrenceChoice::Daily => "Every N days",
         RecurrenceChoice::Monthly => "Monthly",
     };
-    let weekday_text = WEEKDAYS
-        .iter()
-        .enumerate()
-        .map(|(index, day)| {
-            let mark = if state.values.weekdays.contains(day) {
-                'x'
-            } else {
-                ' '
-            };
-            let cursor = if state.weekday_cursor == index {
-                '>'
-            } else {
-                ' '
-            };
-            format!(
-                "{cursor}[{mark}]{}",
-                ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"][index]
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+    let weekday_text = weekday_text(state);
     let mut lines = vec![
         field_line(state, EditorField::Name, "Name", &state.values.name),
         field_line(
@@ -470,34 +447,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &EditorState) {
         ),
         field_line(state, EditorField::Recurrence, "Recurrence", recurrence),
     ];
-    match state.values.recurrence {
-        RecurrenceChoice::Weekly => {
-            lines.push(field_line(
-                state,
-                EditorField::Interval,
-                "Every N weeks",
-                &state.values.interval,
-            ));
-            lines.push(field_line(
-                state,
-                EditorField::Weekdays,
-                "Weekdays",
-                &weekday_text,
-            ));
-        }
-        RecurrenceChoice::Daily => lines.push(field_line(
-            state,
-            EditorField::Interval,
-            "Every N days",
-            &state.values.interval,
-        )),
-        RecurrenceChoice::Monthly => lines.push(field_line(
-            state,
-            EditorField::MonthlyDay,
-            "Day of month",
-            &state.values.monthly_day,
-        )),
-    }
+    add_recurrence_lines(&mut lines, state, &weekday_text);
     lines.push(field_line(
         state,
         EditorField::Enabled,
@@ -537,7 +487,78 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &EditorState) {
     }
 }
 
-fn field_line<'a>(state: &EditorState, field: EditorField, label: &str, value: &str) -> Line<'a> {
+fn editor_title(mode: EditorMode) -> &'static str {
+    match mode {
+        EditorMode::Add => " Add Chore ",
+        EditorMode::Edit(_) => " Edit Chore — recurrence effective today ",
+    }
+}
+
+fn weekday_text(state: &EditorState) -> String {
+    WEEKDAYS
+        .iter()
+        .enumerate()
+        .map(|(index, day)| {
+            let mark = if state.values.weekdays.contains(day) {
+                'x'
+            } else {
+                ' '
+            };
+            let cursor = if state.weekday_cursor == index {
+                '>'
+            } else {
+                ' '
+            };
+            format!(
+                "{cursor}[{mark}]{}",
+                ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"][index]
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn add_recurrence_lines(
+    lines: &mut Vec<Line<'static>>,
+    state: &EditorState,
+    weekday_text: &str,
+) {
+    match state.values.recurrence {
+        RecurrenceChoice::Weekly => {
+            lines.push(field_line(
+                state,
+                EditorField::Interval,
+                "Every N weeks",
+                &state.values.interval,
+            ));
+            lines.push(field_line(
+                state,
+                EditorField::Weekdays,
+                "Weekdays",
+                weekday_text,
+            ));
+        }
+        RecurrenceChoice::Daily => lines.push(field_line(
+            state,
+            EditorField::Interval,
+            "Every N days",
+            &state.values.interval,
+        )),
+        RecurrenceChoice::Monthly => lines.push(field_line(
+            state,
+            EditorField::MonthlyDay,
+            "Day of month",
+            &state.values.monthly_day,
+        )),
+    }
+}
+
+fn field_line(
+    state: &EditorState,
+    field: EditorField,
+    label: &str,
+    value: &str,
+) -> Line<'static> {
     let cursor = if state.focus == field { ">" } else { " " };
     let error = state
         .error(field)
