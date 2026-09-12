@@ -8,16 +8,13 @@ use std::io::{self, stdout};
 
 use crossterm::{
     cursor::{Hide, Show},
+    event::{Event, read},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    layout::Alignment,
-    text::Line,
-    widgets::{Block, Borders, Paragraph},
-};
+use ratatui::{Terminal, backend::CrosstermBackend};
+
+use self::model::{BoardCommand, BoardLayout, BoardState, input_for_key};
 
 trait TerminalControl {
     fn enter(&mut self) -> io::Result<()>;
@@ -86,34 +83,41 @@ pub fn restore_terminal() -> io::Result<()> {
     raw_mode_result.and(screen_result)
 }
 
-/// Enter the alternate screen, render a bootstrap frame, and restore the
-/// terminal before returning.
+/// Run the Weekly Board event loop and restore the terminal before returning.
 ///
 /// # Errors
 ///
 /// Returns an I/O error when terminal setup or rendering fails. Cleanup still
 /// runs through the lifecycle guard.
-pub fn run_placeholder() -> io::Result<()> {
+pub fn run(mut state: BoardState) -> io::Result<()> {
     let _guard = TerminalGuard::enter(CrosstermControl)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
-    terminal.draw(|frame| {
-        let message = Paragraph::new(vec![
-            Line::from("ChoreTUI"),
-            Line::from(""),
-            Line::from("Bootstrap complete — Weekly Board coming next."),
-        ])
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Weekly Chores "),
-        );
+    loop {
+        terminal.draw(|frame| screens::board::render(frame, frame.area(), &mut state))?;
+        let Event::Key(key) = read()? else {
+            continue;
+        };
+        let Some(input) = input_for_key(key) else {
+            continue;
+        };
+        let area = terminal.size()?;
+        let layout = BoardLayout::for_size(area.width, area.height);
+        match state.handle_input(input, layout) {
+            Ok(Some(BoardCommand::Quit)) => break,
+            Ok(Some(BoardCommand::LoadWeek(week))) => state.replace_week(week, Vec::new()),
+            Ok(Some(BoardCommand::Help)) => state.set_status(Some(
+                "Board: arrows/Vim navigate; [/] weeks; Space toggles; q quits".to_owned(),
+            )),
+            Ok(Some(_)) => {
+                state.set_status(Some("Action ready for the application layer".to_owned()));
+            }
+            Ok(None) => state.set_status(None),
+            Err(error) => state.set_status(Some(error.to_string())),
+        }
+    }
 
-        frame.render_widget(message, frame.area());
-    })?;
-
-    Ok(())
+    terminal.show_cursor()
 }
 
 #[cfg(test)]
