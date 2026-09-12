@@ -229,12 +229,6 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 self.status_persistent = false;
                 false
             }
-            Some(_) => {
-                self.state
-                    .set_status(Some("Action ready for the application layer".to_owned()));
-                self.status_persistent = false;
-                false
-            }
             None => false,
         }
     }
@@ -357,7 +351,7 @@ impl<A: BoardApplication> BoardRuntime<A> {
                     self.chore_list = None;
                     self.editor = Some(EditorState::edit(record));
                 }
-                Err(error) => self.set_list_error(error, "Could not load chore for editing."),
+                Err(error) => self.set_list_error(&error, "Could not load chore for editing."),
             },
             Some(ChoreListAction::Help) => {
                 if let Some(list) = self.chore_list.as_mut() {
@@ -367,9 +361,11 @@ impl<A: BoardApplication> BoardRuntime<A> {
                     ));
                 }
             }
-            Some(action @ (ChoreListAction::Disable(_)
-            | ChoreListAction::Enable(_)
-            | ChoreListAction::Delete(_))) => self.apply_lifecycle(action),
+            Some(
+                action @ (ChoreListAction::Disable(_)
+                | ChoreListAction::Enable(_)
+                | ChoreListAction::Delete(_)),
+            ) => self.apply_lifecycle(action),
             None => {}
         }
     }
@@ -384,7 +380,7 @@ impl<A: BoardApplication> BoardRuntime<A> {
         let id = match result {
             Ok(id) => id,
             Err(error) => {
-                self.set_list_error(error, "Lifecycle change failed; nothing changed.");
+                self.set_list_error(&error, "Lifecycle change failed; nothing changed.");
                 return;
             }
         };
@@ -393,7 +389,9 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 Ok(items) => list.replace_items(items),
                 Err(error) => {
                     tracing::error!(%error, chore_id = %id, "saved lifecycle change but list refresh failed");
-                    list.set_status(Some("Saved, but list refresh failed; reopen the list.".to_owned()));
+                    list.set_status(Some(
+                        "Saved, but list refresh failed; reopen the list.".to_owned(),
+                    ));
                 }
             }
         }
@@ -403,7 +401,8 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 if let Some(list) = self.chore_list.as_mut() {
                     list.set_status(Some("Chore lifecycle updated.".to_owned()));
                 } else {
-                    self.state.set_status(Some("Chore lifecycle updated.".to_owned()));
+                    self.state
+                        .set_status(Some("Chore lifecycle updated.".to_owned()));
                 }
                 self.status_persistent = false;
             }
@@ -414,13 +413,16 @@ impl<A: BoardApplication> BoardRuntime<A> {
         }
     }
 
-    fn set_list_error(&mut self, error: A::Error, message: &str) {
+    fn set_list_error(&mut self, error: &A::Error, message: &str) {
         tracing::error!(%error, "chore list action failed");
         if let Some(list) = self.chore_list.as_mut() {
-            list.set_status(Some(format!("Error: {message} Retry or run `chore doctor`.")));
+            list.set_status(Some(format!(
+                "Error: {message} Retry or run `chore doctor`."
+            )));
         } else {
-            self.state
-                .set_status(Some(format!("Error: {message} Retry or run `chore doctor`.")));
+            self.state.set_status(Some(format!(
+                "Error: {message} Retry or run `chore doctor`."
+            )));
         }
         self.status_persistent = true;
     }
@@ -512,13 +514,11 @@ pub fn run<A: BoardApplication>(application: A, confirm_delete: bool) -> io::Res
         terminal.draw(|frame| {
             if let Some(editor) = runtime.editor() {
                 screens::editor::render(frame, frame.area(), editor);
-            } else if runtime.chore_list().is_some() {
+            } else if let Some(chore_list) = runtime.chore_list_mut() {
                 screens::chore_list::render(
                     frame,
                     frame.area(),
-                    runtime
-                        .chore_list_mut()
-                        .expect("chore list presence was checked"),
+                    chore_list,
                 );
             } else {
                 screens::board::render(frame, frame.area(), runtime.state_mut());

@@ -694,22 +694,38 @@ mod tests {
         runtime.handle_input(BoardInput::DisableChore, BoardLayout::SevenColumns);
         assert!(runtime.state().selected_occurrence().is_none());
         runtime.handle_input(BoardInput::OpenChoreList, BoardLayout::SevenColumns);
-        runtime.handle_key(KeyEvent::from(KeyCode::Char(' ')), BoardLayout::SevenColumns);
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char(' ')),
+            BoardLayout::SevenColumns,
+        );
         assert!(runtime.state().selected_occurrence().is_some());
 
-        runtime.handle_key(KeyEvent::from(KeyCode::Char('D')), BoardLayout::SevenColumns);
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char('D')),
+            BoardLayout::SevenColumns,
+        );
         runtime.handle_key(KeyEvent::from(KeyCode::Enter), BoardLayout::SevenColumns);
-        assert!(runtime
-            .chore_list()
-            .is_some_and(|list| !list.is_confirming_delete()));
-        runtime.handle_key(KeyEvent::from(KeyCode::Char('D')), BoardLayout::SevenColumns);
+        assert!(
+            runtime
+                .chore_list()
+                .is_some_and(|list| !list.is_confirming_delete())
+        );
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char('D')),
+            BoardLayout::SevenColumns,
+        );
         runtime.handle_key(KeyEvent::from(KeyCode::Right), BoardLayout::SevenColumns);
         runtime.handle_key(KeyEvent::from(KeyCode::Enter), BoardLayout::SevenColumns);
         assert!(runtime.state().selected_occurrence().is_none());
-        runtime.handle_key(KeyEvent::from(KeyCode::Char('x')), BoardLayout::SevenColumns);
-        assert!(runtime
-            .chore_list()
-            .and_then(|list| list.selected_chore())
-            .is_some_and(Chore::is_deleted));
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char('x')),
+            BoardLayout::SevenColumns,
+        );
+        assert!(
+            runtime
+                .chore_list()
+                .and_then(|list| list.selected_chore())
+                .is_some_and(Chore::is_deleted)
+        );
     }
 }

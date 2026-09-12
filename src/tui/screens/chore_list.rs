@@ -11,6 +11,30 @@ use ratatui::{
 
 use crate::domain::{Chore, ChoreId};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InputMode {
+    Navigate,
+    Filter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeletedView {
+    ActiveOnly,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeletePolicy {
+    Confirm,
+    Immediate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeleteChoice {
+    Cancel,
+    Delete,
+}
+
 /// Persistence action requested by the chore list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChoreListAction {
@@ -29,11 +53,11 @@ pub struct ChoreListState {
     selected: usize,
     scroll: usize,
     filter: String,
-    filtering: bool,
-    show_deleted: bool,
-    confirm_delete: bool,
+    input_mode: InputMode,
+    deleted_view: DeletedView,
+    delete_policy: DeletePolicy,
     delete_candidate: Option<ChoreId>,
-    delete_selected: bool,
+    delete_choice: DeleteChoice,
     status: Option<String>,
 }
 
@@ -45,11 +69,15 @@ impl ChoreListState {
             selected: 0,
             scroll: 0,
             filter: String::new(),
-            filtering: false,
-            show_deleted: false,
-            confirm_delete,
+            input_mode: InputMode::Navigate,
+            deleted_view: DeletedView::ActiveOnly,
+            delete_policy: if confirm_delete {
+                DeletePolicy::Confirm
+            } else {
+                DeletePolicy::Immediate
+            },
             delete_candidate: None,
-            delete_selected: false,
+            delete_choice: DeleteChoice::Cancel,
             status: None,
         }
     }
@@ -68,12 +96,12 @@ impl ChoreListState {
 
     #[must_use]
     pub const fn is_filtering(&self) -> bool {
-        self.filtering
+        self.input_mode == InputMode::Filter
     }
 
     #[must_use]
     pub const fn shows_deleted(&self) -> bool {
-        self.show_deleted
+        self.deleted_view == DeletedView::All
     }
 
     #[must_use]
@@ -106,9 +134,9 @@ impl ChoreListState {
 
     /// Open delete confirmation for a specific non-deleted chore.
     pub fn request_delete(&mut self, id: ChoreId) -> Option<ChoreListAction> {
-        if self.confirm_delete {
+        if self.delete_policy == DeletePolicy::Confirm {
             self.delete_candidate = Some(id);
-            self.delete_selected = false;
+            self.delete_choice = DeleteChoice::Cancel;
             None
         } else {
             Some(ChoreListAction::Delete(id))
@@ -123,14 +151,14 @@ impl ChoreListState {
         if self.delete_candidate.is_some() {
             return self.handle_confirmation(key.code);
         }
-        if self.filtering {
+        if self.input_mode == InputMode::Filter {
             return self.handle_filter_key(key.code);
         }
         self.status = None;
         match key.code {
             KeyCode::Esc => Some(ChoreListAction::Close),
             KeyCode::Char('/') => {
-                self.filtering = true;
+                self.input_mode = InputMode::Filter;
                 None
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -148,7 +176,10 @@ impl ChoreListState {
             KeyCode::Char(' ') => self.lifecycle_action(),
             KeyCode::Char('D') => self.delete_action(),
             KeyCode::Char('x') => {
-                self.show_deleted = !self.show_deleted;
+                self.deleted_view = match self.deleted_view {
+                    DeletedView::ActiveOnly => DeletedView::All,
+                    DeletedView::All => DeletedView::ActiveOnly,
+                };
                 self.selected = 0;
                 self.scroll = 0;
                 None
@@ -174,7 +205,7 @@ impl ChoreListState {
         self.items
             .iter()
             .enumerate()
-            .filter(|(_, chore)| self.show_deleted || !chore.is_deleted())
+            .filter(|(_, chore)| self.deleted_view == DeletedView::All || !chore.is_deleted())
             .filter(|(_, chore)| chore.name().as_str().to_lowercase().contains(&needle))
             .map(|(index, _)| index)
             .collect()
@@ -182,7 +213,7 @@ impl ChoreListState {
 
     fn handle_filter_key(&mut self, code: KeyCode) -> Option<ChoreListAction> {
         match code {
-            KeyCode::Esc | KeyCode::Enter => self.filtering = false,
+            KeyCode::Esc | KeyCode::Enter => self.input_mode = InputMode::Navigate,
             KeyCode::Backspace => {
                 self.filter.pop();
                 self.selected = 0;
@@ -201,16 +232,19 @@ impl ChoreListState {
     fn handle_confirmation(&mut self, code: KeyCode) -> Option<ChoreListAction> {
         match code {
             KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
-                self.delete_selected = !self.delete_selected;
+                self.delete_choice = match self.delete_choice {
+                    DeleteChoice::Cancel => DeleteChoice::Delete,
+                    DeleteChoice::Delete => DeleteChoice::Cancel,
+                };
                 None
             }
             KeyCode::Char('y' | 'Y') => self.delete_candidate.take().map(ChoreListAction::Delete),
-            KeyCode::Enter if self.delete_selected => {
+            KeyCode::Enter if self.delete_choice == DeleteChoice::Delete => {
                 self.delete_candidate.take().map(ChoreListAction::Delete)
             }
             KeyCode::Enter | KeyCode::Esc | KeyCode::Char('n' | 'N') => {
                 self.delete_candidate = None;
-                self.delete_selected = false;
+                self.delete_choice = DeleteChoice::Cancel;
                 None
             }
             _ => None,
@@ -271,8 +305,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &mut ChoreListState) {
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Chore List ")),
         body,
     );
-    let filter = if state.filtering { "Filter>" } else { "Filter:" };
-    let mode = if state.show_deleted {
+    let filter = if state.input_mode == InputMode::Filter {
+        "Filter>"
+    } else {
+        "Filter:"
+    };
+    let mode = if state.deleted_view == DeletedView::All {
         "showing deleted"
     } else {
         "active only"
@@ -288,7 +326,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &mut ChoreListState) {
         footer,
     );
     if state.delete_candidate.is_some() {
-        render_confirmation(frame, area, state.delete_selected);
+        render_confirmation(frame, area, state.delete_choice == DeleteChoice::Delete);
     }
 }
 
@@ -301,7 +339,11 @@ fn chore_line(chore: &Chore, selected: bool) -> Line<'static> {
         "disabled"
     };
     let cursor = if selected { '>' } else { ' ' };
-    let read_only = if chore.is_deleted() { " [read-only]" } else { "" };
+    let read_only = if chore.is_deleted() {
+        " [read-only]"
+    } else {
+        ""
+    };
     let mut style = Style::default();
     if selected {
         style = style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
@@ -317,14 +359,26 @@ fn chore_line(chore: &Chore, selected: bool) -> Line<'static> {
 
 fn render_confirmation(frame: &mut Frame<'_>, area: Rect, delete_selected: bool) {
     let popup = centered(area, 52, 5);
-    let cancel = if delete_selected { "Cancel" } else { "> Cancel" };
-    let delete = if delete_selected { "> Delete" } else { "Delete" };
+    let cancel = if delete_selected {
+        "Cancel"
+    } else {
+        "> Cancel"
+    };
+    let delete = if delete_selected {
+        "> Delete"
+    } else {
+        "Delete"
+    };
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(format!(
             "Soft-delete this chore? History is retained.\n{cancel}    {delete}"
         ))
-        .block(Block::default().borders(Borders::ALL).title(" Confirm delete ")),
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Confirm delete "),
+        ),
         popup,
     );
 }
@@ -369,7 +423,10 @@ mod tests {
         state.handle_key(key(KeyCode::Char('l')));
         state.handle_key(key(KeyCode::Enter));
         assert_eq!(state.filter(), "l");
-        assert_eq!(state.selected_chore().map(|item| item.name().as_str()), Some("Laundry"));
+        assert_eq!(
+            state.selected_chore().map(|item| item.name().as_str()),
+            Some("Laundry")
+        );
     }
 
     #[test]
@@ -383,6 +440,9 @@ mod tests {
         assert!(!state.is_confirming_delete());
         assert_eq!(state.request_delete(id), None);
         state.handle_key(key(KeyCode::Right));
-        assert_eq!(state.handle_key(key(KeyCode::Enter)), Some(ChoreListAction::Delete(id)));
+        assert_eq!(
+            state.handle_key(key(KeyCode::Enter)),
+            Some(ChoreListAction::Delete(id))
+        );
     }
 }
