@@ -3,4 +3,5 @@
 pub mod migrations;
 pub mod sqlite;
 
-pub use sqlite::{SqliteError, SqliteStore};
+pub use migrations::LATEST_VERSION;
+pub use sqlite::{DatabaseDiagnostics, SqliteError, SqliteStore};

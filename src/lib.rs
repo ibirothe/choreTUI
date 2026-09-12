@@ -8,6 +8,7 @@ pub mod app;
 pub mod cli;
 pub mod config;
 pub mod diagnostics;
+pub mod doctor;
 pub mod domain;
 pub mod recurrence;
 pub mod storage;

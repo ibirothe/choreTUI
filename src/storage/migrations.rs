@@ -45,7 +45,7 @@ fn migrate_with(connection: &mut Connection, migrations: &[Migration]) -> Result
     Ok(())
 }
 
-fn schema_version(connection: &Connection) -> Result<i64, SqliteError> {
+pub(super) fn schema_version(connection: &Connection) -> Result<i64, SqliteError> {
     let migrations_exist = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master \
          WHERE type = 'table' AND name = 'schema_migrations')",
