@@ -11,14 +11,20 @@ use std::{
 
 use crossterm::{
     cursor::{Hide, Show},
-    event::{Event, read},
+    event::{Event, KeyEvent, read},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use self::model::{BoardCommand, BoardLayout, BoardState, input_for_key};
-use crate::domain::{CalendarDate, IsoWeek, Occurrence, OccurrenceId, OccurrenceState};
+use self::{
+    model::{BoardCommand, BoardLayout, BoardState, input_for_key},
+    screens::editor::{EditorAction, EditorState},
+};
+use crate::{
+    app::editor::{ChoreSubmission, EditorRecord},
+    domain::{CalendarDate, ChoreId, IsoWeek, Occurrence, OccurrenceId, OccurrenceState},
+};
 
 /// Application operations required by the Weekly Board event loop.
 pub trait BoardApplication {
@@ -38,12 +44,25 @@ pub trait BoardApplication {
     ///
     /// Returns an application error when the transaction fails.
     fn toggle_completion(&mut self, id: OccurrenceId) -> Result<Occurrence, Self::Error>;
+    /// Load one chore and its latest schedule for editing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when the chore or schedule cannot be loaded.
+    fn load_editor(&mut self, id: ChoreId) -> Result<EditorRecord, Self::Error>;
+    /// Atomically save one validated editor submission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when the transaction fails.
+    fn save_editor(&mut self, submission: ChoreSubmission) -> Result<ChoreId, Self::Error>;
 }
 
 /// Deterministic bridge between board commands and application operations.
 pub struct BoardRuntime<A> {
     application: A,
     state: BoardState,
+    editor: Option<EditorState>,
     status_persistent: bool,
 }
 
@@ -66,6 +85,7 @@ impl<A: BoardApplication> BoardRuntime<A> {
         Self {
             application,
             state,
+            editor: None,
             status_persistent,
         }
     }
@@ -77,6 +97,21 @@ impl<A: BoardApplication> BoardRuntime<A> {
 
     pub const fn state_mut(&mut self) -> &mut BoardState {
         &mut self.state
+    }
+
+    #[must_use]
+    pub const fn editor(&self) -> Option<&EditorState> {
+        self.editor.as_ref()
+    }
+
+    /// Route a raw key to the active editor or the Weekly Board.
+    pub fn handle_key(&mut self, key: KeyEvent, layout: BoardLayout) -> bool {
+        if let Some(editor) = self.editor.as_mut() {
+            let action = editor.handle_key(key);
+            self.handle_editor_action(action);
+            return false;
+        }
+        input_for_key(key).is_some_and(|input| self.handle_input(input, layout))
     }
 
     /// Apply an input and return `true` only when the application should quit.
@@ -103,6 +138,23 @@ impl<A: BoardApplication> BoardRuntime<A> {
             }
             Some(BoardCommand::ToggleCompletion(id)) => {
                 self.toggle_completion(id);
+                false
+            }
+            Some(BoardCommand::AddChore(weekday)) => {
+                self.editor = Some(EditorState::add(weekday));
+                false
+            }
+            Some(BoardCommand::EditChore(id)) => {
+                match self.application.load_editor(id) {
+                    Ok(record) => self.editor = Some(EditorState::edit(record)),
+                    Err(error) => {
+                        tracing::error!(%error, chore_id = %id, "could not open chore editor");
+                        self.state.set_status(Some(
+                            "Error: Could not load chore; retry or run `chore doctor`.".to_owned(),
+                        ));
+                        self.status_persistent = true;
+                    }
+                }
                 false
             }
             Some(BoardCommand::Help) => {
@@ -172,6 +224,44 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 ));
                 self.status_persistent = true;
             }
+        }
+    }
+
+    fn handle_editor_action(&mut self, action: Option<EditorAction>) {
+        match action {
+            Some(EditorAction::Close) => self.editor = None,
+            Some(EditorAction::Save(submission)) => {
+                match self.application.save_editor(submission) {
+                    Ok(id) => {
+                        self.editor = None;
+                        match self.application.load_week(self.state.week()) {
+                            Ok(occurrences) => {
+                                self.state.refresh_occurrences(occurrences, None);
+                                self.state.set_status(Some("Chore saved.".to_owned()));
+                                self.status_persistent = false;
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, chore_id = %id, "saved chore but refresh failed");
+                                self.state.set_status(Some(
+                                    "Saved, but refresh failed; reopen the week or run `chore doctor`."
+                                        .to_owned(),
+                                ));
+                                self.status_persistent = true;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "could not save chore editor");
+                        if let Some(editor) = self.editor.as_mut() {
+                            editor.set_save_error(
+                                "Could not save; nothing changed. Retry or run `chore doctor`."
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                }
+            }
+            None => {}
         }
     }
 }
@@ -259,16 +349,19 @@ pub fn run<A: BoardApplication>(application: A) -> io::Result<()> {
     let mut runtime = BoardRuntime::new(application);
 
     loop {
-        terminal.draw(|frame| screens::board::render(frame, frame.area(), runtime.state_mut()))?;
+        terminal.draw(|frame| {
+            if let Some(editor) = runtime.editor() {
+                screens::editor::render(frame, frame.area(), editor);
+            } else {
+                screens::board::render(frame, frame.area(), runtime.state_mut());
+            }
+        })?;
         let Event::Key(key) = read()? else {
-            continue;
-        };
-        let Some(input) = input_for_key(key) else {
             continue;
         };
         let area = terminal.size()?;
         let layout = BoardLayout::for_size(area.width, area.height);
-        if runtime.handle_input(input, layout) {
+        if runtime.handle_key(key, layout) {
             break;
         }
     }
@@ -289,6 +382,7 @@ mod tests {
 
     use super::{BoardApplication, BoardRuntime, TerminalControl, TerminalGuard};
     use crate::{
+        app::editor::{ChoreSubmission, EditorRecord},
         domain::{
             CalendarDate, ChoreId, ChoreName, IsoWeek, Occurrence, OccurrenceId, OccurrenceSeed,
             OccurrenceState, ScheduleId, Timestamp,
@@ -349,6 +443,14 @@ mod tests {
             item.toggle_completion(timestamp(50))
                 .map_err(|_| FakeError)?;
             Ok(item.clone())
+        }
+
+        fn load_editor(&mut self, _id: ChoreId) -> Result<EditorRecord, Self::Error> {
+            Err(FakeError)
+        }
+
+        fn save_editor(&mut self, _submission: ChoreSubmission) -> Result<ChoreId, Self::Error> {
+            Err(FakeError)
         }
     }
 

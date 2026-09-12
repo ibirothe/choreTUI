@@ -8,7 +8,7 @@ use time::{Date, Duration, format_description::well_known::Rfc3339, macros::form
 use uuid::Uuid;
 
 use crate::{
-    app::use_cases::TransactionalStore,
+    app::use_cases::{AtomicEditorStore, EditorUpdate, TransactionalStore},
     domain::{
         CalendarDate, Chore, ChoreId, ChoreName, ChoreTimestamps, Description, IsoWeek, IsoWeekday,
         MonthlyDay, Occurrence, OccurrenceId, OccurrenceSeed, OccurrenceState, RecurrenceInterval,
@@ -422,6 +422,86 @@ impl ChoreRepository for SqliteStore {
 
     fn save(&mut self, chore: &Chore) -> Result<(), Self::Error> {
         save_chore(&self.connection, chore)
+    }
+}
+
+impl AtomicEditorStore for SqliteStore {
+    type Error = SqliteError;
+
+    fn create_editor_chore(
+        &mut self,
+        chore: &Chore,
+        schedule: &Schedule,
+    ) -> Result<(), Self::Error> {
+        if schedule.chore_id() != chore.id() {
+            return Err(SqliteError::ScheduleChoreMismatch);
+        }
+        if chore.is_enabled() != schedule.window().valid_until().is_none() {
+            return Err(SqliteError::InvalidReplacementWindow);
+        }
+        let transaction = self.connection.transaction()?;
+        save_chore(&transaction, chore)?;
+        insert_schedule(&transaction, schedule)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn update_editor_chore(&mut self, update: EditorUpdate<'_>) -> Result<(), Self::Error> {
+        if let Some(replacement) = update.replacement {
+            let window = replacement.window();
+            if replacement.chore_id() != update.chore_id {
+                return Err(SqliteError::ScheduleChoreMismatch);
+            }
+            if window.anchor_date() != update.today
+                || window.valid_from() != update.today
+                || (update.enabled != window.valid_until().is_none())
+            {
+                return Err(SqliteError::InvalidReplacementWindow);
+            }
+        }
+
+        let transaction = self.connection.transaction()?;
+        let mut chore = load_chore(&transaction, update.chore_id)?
+            .ok_or(SqliteError::NotFound { entity: "chore" })?;
+        if chore.is_deleted() {
+            return Err(SqliteError::DeletedChore);
+        }
+        let was_enabled = chore.is_enabled();
+        chore.rename(update.name, update.description, update.updated_at);
+        let _ = chore.set_enabled(update.enabled, update.updated_at);
+        save_chore(&transaction, &chore)?;
+        transaction.execute(
+            "UPDATE occurrences SET name_snapshot = ?1, description_snapshot = ?2, updated_at = ?3 \
+             WHERE chore_id = ?4 AND state = 'pending' AND due_date >= ?5",
+            params![
+                chore.name().as_str(),
+                chore.description().map(Description::as_str),
+                format_timestamp(update.updated_at)?,
+                update.chore_id.to_string(),
+                format_date(update.today)?,
+            ],
+        )?;
+
+        let active = active_schedule(&transaction, update.chore_id)?;
+        if (update.replacement.is_some() || (was_enabled && !update.enabled))
+            && let Some(schedule) = active.as_ref()
+        {
+            close_schedule(&transaction, schedule, update.today)?;
+        }
+        if !was_enabled && update.enabled && update.replacement.is_none() {
+            return Err(SqliteError::MissingActiveSchedule);
+        }
+        if let Some(replacement) = update.replacement {
+            insert_schedule(&transaction, replacement)?;
+        }
+        if update.replacement.is_some() || !update.enabled {
+            transaction.execute(
+                "DELETE FROM occurrences WHERE chore_id = ?1 AND state = 'pending' AND due_date >= ?2",
+                params![update.chore_id.to_string(), format_date(update.today)?],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 }
 
@@ -1474,6 +1554,33 @@ mod tests {
         assert_eq!(
             occurrence_on(&store, 2).state(),
             OccurrenceState::Completed { at: timestamp(20) }
+        );
+    }
+
+    #[test]
+    fn editor_create_rolls_back_chore_when_schedule_insert_fails() {
+        let mut store = SqliteStore::open_in_memory().expect("database should open");
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_editor_schedule BEFORE INSERT ON schedules \
+                 BEGIN SELECT RAISE(ABORT, 'injected schedule failure'); END;",
+            )
+            .expect("failure trigger should install");
+        let chore = Chore::new(ChoreId::new(), name("Rollback"), None, timestamp(1));
+        let schedule = Schedule::daily_interval(
+            ScheduleId::new(),
+            chore.id(),
+            RecurrenceInterval::new(1).expect("interval should be valid"),
+            ScheduleWindow::new(date(2026, 9, 1), date(2026, 9, 1), None, timestamp(1))
+                .expect("window should be valid"),
+        );
+
+        assert!(AtomicEditorStore::create_editor_chore(&mut store, &chore, &schedule).is_err());
+        assert!(
+            ChoreRepository::find(&store, chore.id())
+                .expect("lookup should succeed")
+                .is_none()
         );
     }
 }

@@ -3,10 +3,11 @@
 use std::error::Error;
 
 use crate::{
+    app::editor::{ChoreSubmission, EditorRecord, SchedulePattern},
     domain::{
-        ChoreId, ChoreName, Description, IsoWeek, Occurrence, OccurrenceId, Schedule, Timestamp,
-        WeekError,
-        ports::{Clock, OccurrenceRepository},
+        CalendarDate, Chore, ChoreId, ChoreName, Description, IsoWeek, Occurrence, OccurrenceId,
+        Schedule, ScheduleId, ScheduleWindow, Timestamp, ValidationError, WeekError,
+        ports::{ChoreRepository, Clock, OccurrenceRepository, ScheduleRepository},
     },
     recurrence::{DateRange, RecurrenceError},
 };
@@ -23,6 +24,53 @@ pub enum BoardDataError<E: Error + 'static> {
     /// The derived materialization range was invalid.
     #[error(transparent)]
     Recurrence(#[from] RecurrenceError),
+}
+
+/// Failure while loading or saving editor data.
+#[derive(Debug, thiserror::Error)]
+pub enum EditorDataError<E: Error + 'static> {
+    #[error("persistence operation failed: {0}")]
+    Persistence(#[source] E),
+    #[error("chore was not found")]
+    MissingChore,
+    #[error("schedule was not found or is invalid")]
+    MissingSchedule,
+    #[error(transparent)]
+    Validation(#[from] ValidationError),
+}
+
+/// All fields needed by an adapter to update one chore atomically.
+pub struct EditorUpdate<'a> {
+    pub chore_id: ChoreId,
+    pub name: ChoreName,
+    pub description: Option<Description>,
+    pub enabled: bool,
+    pub replacement: Option<&'a Schedule>,
+    pub today: CalendarDate,
+    pub updated_at: Timestamp,
+}
+
+/// Atomic persistence boundary for editor saves.
+pub trait AtomicEditorStore {
+    type Error: Error + Send + Sync + 'static;
+
+    /// Persist a new chore and its initial schedule in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error and rolls back both records when persistence fails.
+    fn create_editor_chore(
+        &mut self,
+        chore: &Chore,
+        schedule: &Schedule,
+    ) -> Result<(), Self::Error>;
+
+    /// Persist metadata, lifecycle and optional schedule revision atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error and rolls back the complete update on failure.
+    fn update_editor_chore(&mut self, update: EditorUpdate<'_>) -> Result<(), Self::Error>;
 }
 
 /// Transaction boundary required by mutating application use cases.
@@ -233,6 +281,130 @@ where
 
 impl<P, C> UseCases<P, C>
 where
+    P: AtomicEditorStore
+        + ChoreRepository<Error = <P as AtomicEditorStore>::Error>
+        + ScheduleRepository<Error = <P as AtomicEditorStore>::Error>,
+    C: Clock,
+{
+    /// Load values for editing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an editor-data error when the chore or its schedule cannot be loaded.
+    pub fn load_editor(
+        &self,
+        chore_id: ChoreId,
+    ) -> Result<EditorRecord, EditorDataError<<P as AtomicEditorStore>::Error>> {
+        let chore = self
+            .persistence
+            .find(chore_id)
+            .map_err(EditorDataError::Persistence)?
+            .ok_or(EditorDataError::MissingChore)?;
+        let schedule = self
+            .persistence
+            .for_chore(chore_id)
+            .map_err(EditorDataError::Persistence)?
+            .into_iter()
+            .last()
+            .ok_or(EditorDataError::MissingSchedule)?;
+        let pattern =
+            SchedulePattern::from_schedule(&schedule).ok_or(EditorDataError::MissingSchedule)?;
+        Ok(EditorRecord {
+            id: chore.id(),
+            name: chore.name().clone(),
+            description: chore.description().cloned(),
+            enabled: chore.is_enabled(),
+            pattern,
+        })
+    }
+
+    /// Atomically create or update a chore, with recurrence changes effective today.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation or persistence errors without partially saving the form.
+    pub fn save_editor(
+        &mut self,
+        submission: ChoreSubmission,
+    ) -> Result<ChoreId, EditorDataError<<P as AtomicEditorStore>::Error>> {
+        let today = self.clock.today();
+        let now = self.clock.now();
+        if let Some(chore_id) = submission.id {
+            let current = self.load_editor(chore_id)?;
+            let needs_schedule =
+                current.pattern != submission.pattern || (!current.enabled && submission.enabled);
+            let replacement = needs_schedule
+                .then(|| {
+                    build_schedule(
+                        chore_id,
+                        &submission.pattern,
+                        today,
+                        now,
+                        submission.enabled,
+                    )
+                })
+                .transpose()?;
+            self.persistence
+                .update_editor_chore(EditorUpdate {
+                    chore_id,
+                    name: submission.name,
+                    description: submission.description,
+                    enabled: submission.enabled,
+                    replacement: replacement.as_ref(),
+                    today,
+                    updated_at: now,
+                })
+                .map_err(EditorDataError::Persistence)?;
+            Ok(chore_id)
+        } else {
+            let chore_id = ChoreId::new();
+            let mut chore = Chore::new(chore_id, submission.name, submission.description, now);
+            if !submission.enabled {
+                let _ = chore.set_enabled(false, now);
+            }
+            let schedule = build_schedule(
+                chore_id,
+                &submission.pattern,
+                today,
+                now,
+                submission.enabled,
+            )?;
+            self.persistence
+                .create_editor_chore(&chore, &schedule)
+                .map_err(EditorDataError::Persistence)?;
+            Ok(chore_id)
+        }
+    }
+}
+
+fn build_schedule(
+    chore_id: ChoreId,
+    pattern: &SchedulePattern,
+    today: CalendarDate,
+    now: Timestamp,
+    enabled: bool,
+) -> Result<Schedule, ValidationError> {
+    let until = (!enabled).then_some(today);
+    let window = ScheduleWindow::new(today, today, until, now)?;
+    Ok(match pattern {
+        SchedulePattern::Weekly { interval, weekdays } => Schedule::weekly(
+            ScheduleId::new(),
+            chore_id,
+            *interval,
+            weekdays.iter().copied(),
+            window,
+        )?,
+        SchedulePattern::DailyInterval { interval } => {
+            Schedule::daily_interval(ScheduleId::new(), chore_id, *interval, window)
+        }
+        SchedulePattern::Monthly { day } => {
+            Schedule::monthly(ScheduleId::new(), chore_id, *day, window)
+        }
+    })
+}
+
+impl<P, C> UseCases<P, C>
+where
     P: TransactionalStore + OccurrenceRepository<Error = <P as TransactionalStore>::Error>,
     C: Clock,
 {
@@ -273,8 +445,8 @@ mod tests {
     use super::*;
     use crate::{
         domain::{
-            CalendarDate, Chore, ChoreId, ChoreName, IsoWeekday, OccurrenceState,
-            RecurrenceInterval, ScheduleId, ScheduleWindow, WeeklyStatistics,
+            CalendarDate, Chore, ChoreId, ChoreName, IsoWeekday, MonthlyDay, OccurrenceState,
+            RecurrenceInterval, RecurrenceKind, ScheduleId, ScheduleWindow, WeeklyStatistics,
             ports::{ChoreRepository, ScheduleRepository},
         },
         storage::SqliteStore,
@@ -402,5 +574,92 @@ mod tests {
             .expect("occurrence should remain selected");
         assert_eq!(pending.state(), OccurrenceState::Pending);
         assert_eq!(pending.completed_at(), None);
+    }
+
+    #[test]
+    fn editor_creates_all_recurrences_and_revises_effective_today() {
+        let today = date(2026, 9, 10);
+        let mut application = UseCases::new(
+            SqliteStore::open_in_memory().expect("database should open"),
+            FixedClock {
+                today,
+                now: timestamp(100),
+            },
+        );
+        let weekly = application
+            .save_editor(ChoreSubmission {
+                id: None,
+                name: ChoreName::new("Bins").expect("name should be valid"),
+                description: None,
+                enabled: true,
+                pattern: SchedulePattern::Weekly {
+                    interval: RecurrenceInterval::new(2).expect("interval should be valid"),
+                    weekdays: vec![IsoWeekday::Thursday],
+                },
+            })
+            .expect("weekly chore should save");
+        let daily = application
+            .save_editor(ChoreSubmission {
+                id: None,
+                name: ChoreName::new("Water").expect("name should be valid"),
+                description: None,
+                enabled: true,
+                pattern: SchedulePattern::DailyInterval {
+                    interval: RecurrenceInterval::new(3).expect("interval should be valid"),
+                },
+            })
+            .expect("daily chore should save");
+        let monthly = application
+            .save_editor(ChoreSubmission {
+                id: None,
+                name: ChoreName::new("Filter").expect("name should be valid"),
+                description: None,
+                enabled: true,
+                pattern: SchedulePattern::Monthly {
+                    day: MonthlyDay::new(31).expect("monthly day should be valid"),
+                },
+            })
+            .expect("monthly chore should save");
+
+        application
+            .save_editor(ChoreSubmission {
+                id: Some(weekly),
+                name: ChoreName::new("Bins revised").expect("name should be valid"),
+                description: Description::optional("Effective today")
+                    .expect("description should be valid"),
+                enabled: true,
+                pattern: SchedulePattern::DailyInterval {
+                    interval: RecurrenceInterval::new(1).expect("interval should be valid"),
+                },
+            })
+            .expect("revision should save");
+        let occurrences = application
+            .load_week(IsoWeek::containing(today))
+            .expect("edited week should refresh");
+        assert!(
+            occurrences
+                .iter()
+                .any(|item| item.chore_id() == weekly && item.name().as_str() == "Bins revised")
+        );
+
+        let (store, _) = application.into_parts();
+        let weekly_revisions =
+            ScheduleRepository::for_chore(&store, weekly).expect("weekly revisions should load");
+        assert_eq!(weekly_revisions.len(), 2);
+        assert_eq!(
+            weekly_revisions.last().map(Schedule::kind),
+            Some(RecurrenceKind::DailyInterval)
+        );
+        assert_eq!(
+            ScheduleRepository::for_chore(&store, daily).expect("daily schedule should load")[0]
+                .kind(),
+            RecurrenceKind::DailyInterval
+        );
+        assert_eq!(
+            ScheduleRepository::for_chore(&store, monthly).expect("monthly schedule should load")
+                [0]
+            .kind(),
+            RecurrenceKind::Monthly
+        );
     }
 }
