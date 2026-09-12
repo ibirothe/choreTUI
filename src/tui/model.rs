@@ -103,6 +103,7 @@ pub struct BoardState {
     week: IsoWeek,
     today: CalendarDate,
     occurrences: Vec<Occurrence>,
+    show_completed: bool,
     selected_day: usize,
     selected_occurrence: Option<usize>,
     scroll_offsets: [usize; 7],
@@ -117,6 +118,7 @@ impl BoardState {
             week,
             today,
             occurrences,
+            show_completed: true,
             selected_day: if week.contains(today) {
                 weekday_index(today.as_date().weekday())
             } else {
@@ -160,6 +162,12 @@ impl BoardState {
         self.status = status;
     }
 
+    /// Control completed-row visibility without changing weekly statistics.
+    pub fn set_show_completed(&mut self, show_completed: bool) {
+        self.show_completed = show_completed;
+        self.select_preferred_occurrence();
+    }
+
     /// Return the date at an ISO weekday position (`0` = Monday).
     #[must_use]
     pub fn day_date(&self, day: usize) -> CalendarDate {
@@ -178,7 +186,12 @@ impl BoardState {
         let date = self.day_date(day);
         self.occurrences
             .iter()
-            .filter(move |item| item.due_date() == date && item.state() != OccurrenceState::Skipped)
+            .filter(move |item| {
+                item.due_date() == date
+                    && item.state() != OccurrenceState::Skipped
+                    && (self.show_completed
+                        || !matches!(item.state(), OccurrenceState::Completed { .. }))
+            })
     }
 
     #[must_use]
@@ -579,5 +592,21 @@ mod tests {
                 .unwrap(),
             Some(BoardCommand::LoadWeek(IsoWeek::new(2027, 1).unwrap()))
         );
+    }
+
+    #[test]
+    fn hiding_completed_rows_keeps_them_in_statistics() {
+        let monday = date(2026, 9, 7);
+        let completed = occurrence(
+            monday,
+            "Done",
+            OccurrenceState::Completed { at: timestamp(2) },
+        );
+        let mut state = BoardState::new(IsoWeek::containing(monday), monday, vec![completed]);
+        assert_eq!(state.statistics().completed(), 1);
+        assert_eq!(state.occurrences_for_day(0).count(), 1);
+        state.set_show_completed(false);
+        assert_eq!(state.occurrences_for_day(0).count(), 0);
+        assert_eq!(state.statistics().completed(), 1);
     }
 }
