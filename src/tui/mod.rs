@@ -11,7 +11,7 @@ use std::{
 
 use crossterm::{
     cursor::{Hide, Show},
-    event::{Event, KeyEvent, read},
+    event::{Event, KeyCode, KeyEvent, read},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -21,6 +21,7 @@ use self::{
     model::{BoardCommand, BoardLayout, BoardState, input_for_key},
     screens::chore_list::{ChoreListAction, ChoreListState},
     screens::editor::{EditorAction, EditorState},
+    screens::help::{HelpContext, HelpState},
 };
 use crate::{
     app::editor::{ChoreSubmission, EditorRecord},
@@ -89,6 +90,7 @@ pub struct BoardRuntime<A> {
     state: BoardState,
     editor: Option<EditorState>,
     chore_list: Option<ChoreListState>,
+    help: Option<HelpState>,
     confirm_delete: bool,
     status_persistent: bool,
 }
@@ -98,12 +100,12 @@ impl<A: BoardApplication> BoardRuntime<A> {
     /// usable empty board with persistent, actionable feedback.
     #[must_use]
     pub fn new(application: A) -> Self {
-        Self::new_with_options(application, true)
+        Self::new_with_config(application, crate::config::Config::default())
     }
 
     /// Load the current week with explicit user-interface options.
     #[must_use]
-    pub fn new_with_options(mut application: A, confirm_delete: bool) -> Self {
+    pub fn new_with_config(mut application: A, config: crate::config::Config) -> Self {
         let today = application.today();
         let week = IsoWeek::containing(today);
         let (state, status_persistent) = match application.load_week(week) {
@@ -115,12 +117,15 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 (state, true)
             }
         };
+        let mut state = state;
+        state.set_show_completed(config.show_completed);
         Self {
             application,
             state,
             editor: None,
             chore_list: None,
-            confirm_delete,
+            help: None,
+            confirm_delete: config.confirm_delete,
             status_persistent,
         }
     }
@@ -148,8 +153,28 @@ impl<A: BoardApplication> BoardRuntime<A> {
         self.chore_list.as_mut()
     }
 
+    #[must_use]
+    pub const fn help(&self) -> Option<&HelpState> {
+        self.help.as_ref()
+    }
+
     /// Route a raw key to the active editor or the Weekly Board.
     pub fn handle_key(&mut self, key: KeyEvent, layout: BoardLayout) -> bool {
+        if let Some(help) = self.help.as_mut() {
+            if help.handle_key(key, 12) {
+                self.help = None;
+            }
+            return false;
+        }
+        if key.code == KeyCode::Char('?')
+            && self
+                .editor
+                .as_ref()
+                .is_some_and(|editor| !editor.is_confirming_cancel())
+        {
+            self.help = Some(HelpState::new(HelpContext::Editor));
+            return false;
+        }
         if let Some(editor) = self.editor.as_mut() {
             let action = editor.handle_key(key);
             self.handle_editor_action(action);
@@ -223,9 +248,7 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 false
             }
             Some(BoardCommand::Help) => {
-                self.state.set_status(Some(
-                    "Board: arrows/Vim navigate; [/] weeks; Space toggles; q quits".to_owned(),
-                ));
+                self.help = Some(HelpState::new(HelpContext::Board));
                 self.status_persistent = false;
                 false
             }
@@ -354,12 +377,7 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 Err(error) => self.set_list_error(&error, "Could not load chore for editing."),
             },
             Some(ChoreListAction::Help) => {
-                if let Some(list) = self.chore_list.as_mut() {
-                    list.set_status(Some(
-                        "List: / filter; arrows/Vim move; Space lifecycle; D delete; x deleted; Esc back"
-                            .to_owned(),
-                    ));
-                }
+                self.help = Some(HelpState::new(HelpContext::ChoreList));
             }
             Some(
                 action @ (ChoreListAction::Disable(_)
@@ -505,14 +523,16 @@ pub fn restore_terminal() -> io::Result<()> {
 ///
 /// Returns an I/O error when terminal setup or rendering fails. Cleanup still
 /// runs through the lifecycle guard.
-pub fn run<A: BoardApplication>(application: A, confirm_delete: bool) -> io::Result<()> {
+pub fn run<A: BoardApplication>(application: A, config: crate::config::Config) -> io::Result<()> {
     let _guard = TerminalGuard::enter(CrosstermControl)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-    let mut runtime = BoardRuntime::new_with_options(application, confirm_delete);
+    let mut runtime = BoardRuntime::new_with_config(application, config);
 
     loop {
         terminal.draw(|frame| {
-            if let Some(editor) = runtime.editor() {
+            if let Some(help) = runtime.help() {
+                screens::help::render(frame, frame.area(), help);
+            } else if let Some(editor) = runtime.editor() {
                 screens::editor::render(frame, frame.area(), editor);
             } else if let Some(chore_list) = runtime.chore_list_mut() {
                 screens::chore_list::render(frame, frame.area(), chore_list);

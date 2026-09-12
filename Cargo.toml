@@ -5,6 +5,7 @@ edition = "2024"
 description = "A local, keyboard-driven TUI for recurring weekly chores"
 repository = "https://github.com/ibirothe/choreTUI"
 rust-version = "1.88"
+publish = false
 
 [[bin]]
 name = "chore"

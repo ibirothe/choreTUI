@@ -3,3 +3,4 @@
 pub mod board;
 pub mod chore_list;
 pub mod editor;
+pub mod help;

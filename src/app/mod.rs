@@ -112,5 +112,5 @@ where
 /// restored.
 pub fn run(store: SqliteStore, config: crate::config::Config) -> io::Result<()> {
     tracing::info!("starting ChoreTUI");
-    tui::run(UseCases::new(store, SystemClock), config.confirm_delete)
+    tui::run(UseCases::new(store, SystemClock), config)
 }
