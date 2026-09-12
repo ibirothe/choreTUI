@@ -286,6 +286,18 @@ where
         + ScheduleRepository<Error = <P as AtomicEditorStore>::Error>,
     C: Clock,
 {
+    /// List chores in repository-defined display order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the persistence adapter error when loading fails.
+    pub fn list_chores(
+        &self,
+        include_deleted: bool,
+    ) -> Result<Vec<Chore>, <P as AtomicEditorStore>::Error> {
+        self.persistence.list(include_deleted)
+    }
+
     /// Load values for editing.
     ///
     /// # Errors
@@ -440,6 +452,7 @@ where
 mod tests {
     use std::env;
 
+    use crossterm::event::{KeyCode, KeyEvent};
     use tempfile::tempdir_in;
 
     use super::*;
@@ -661,5 +674,42 @@ mod tests {
             .kind(),
             RecurrenceKind::Monthly
         );
+    }
+
+    #[test]
+    fn chore_list_lifecycle_transitions_refresh_the_board() {
+        let temporary = tempdir_in(env::current_dir().expect("working directory should exist"))
+            .expect("temporary directory should be created");
+        let monday = date(2026, 9, 7);
+        let store = seeded_store(&temporary.path().join("lifecycle.db"), monday);
+        let mut runtime = BoardRuntime::new(UseCases::new(
+            store,
+            FixedClock {
+                today: monday,
+                now: timestamp(100),
+            },
+        ));
+        assert!(runtime.state().selected_occurrence().is_some());
+
+        runtime.handle_input(BoardInput::DisableChore, BoardLayout::SevenColumns);
+        assert!(runtime.state().selected_occurrence().is_none());
+        runtime.handle_input(BoardInput::OpenChoreList, BoardLayout::SevenColumns);
+        runtime.handle_key(KeyEvent::from(KeyCode::Char(' ')), BoardLayout::SevenColumns);
+        assert!(runtime.state().selected_occurrence().is_some());
+
+        runtime.handle_key(KeyEvent::from(KeyCode::Char('D')), BoardLayout::SevenColumns);
+        runtime.handle_key(KeyEvent::from(KeyCode::Enter), BoardLayout::SevenColumns);
+        assert!(runtime
+            .chore_list()
+            .is_some_and(|list| !list.is_confirming_delete()));
+        runtime.handle_key(KeyEvent::from(KeyCode::Char('D')), BoardLayout::SevenColumns);
+        runtime.handle_key(KeyEvent::from(KeyCode::Right), BoardLayout::SevenColumns);
+        runtime.handle_key(KeyEvent::from(KeyCode::Enter), BoardLayout::SevenColumns);
+        assert!(runtime.state().selected_occurrence().is_none());
+        runtime.handle_key(KeyEvent::from(KeyCode::Char('x')), BoardLayout::SevenColumns);
+        assert!(runtime
+            .chore_list()
+            .and_then(|list| list.selected_chore())
+            .is_some_and(Chore::is_deleted));
     }
 }

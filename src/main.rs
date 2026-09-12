@@ -47,7 +47,7 @@ fn run_interactive(paths: &AppPaths) -> Result<()> {
     let loaded = config::load(paths.config_file())?;
     let _log_guard = diagnostics::init_file(paths.state_dir())
         .context("could not initialize rolling diagnostics log")?;
-    for warning in loaded.warnings {
+    for warning in &loaded.warnings {
         eprintln!("warning: {warning}");
         tracing::warn!(message = %warning, "configuration warning");
     }
@@ -62,5 +62,5 @@ fn run_interactive(paths: &AppPaths) -> Result<()> {
             paths.database_file().display()
         )
     })?;
-    choretui::app::run(store).context("interactive application failed")
+    choretui::app::run(store, loaded.config).context("interactive application failed")
 }

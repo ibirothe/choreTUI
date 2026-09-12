@@ -19,11 +19,12 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use self::{
     model::{BoardCommand, BoardLayout, BoardState, input_for_key},
+    screens::chore_list::{ChoreListAction, ChoreListState},
     screens::editor::{EditorAction, EditorState},
 };
 use crate::{
     app::editor::{ChoreSubmission, EditorRecord},
-    domain::{CalendarDate, ChoreId, IsoWeek, Occurrence, OccurrenceId, OccurrenceState},
+    domain::{CalendarDate, Chore, ChoreId, IsoWeek, Occurrence, OccurrenceId, OccurrenceState},
 };
 
 /// Application operations required by the Weekly Board event loop.
@@ -56,6 +57,30 @@ pub trait BoardApplication {
     ///
     /// Returns an application error when the transaction fails.
     fn save_editor(&mut self, submission: ChoreSubmission) -> Result<ChoreId, Self::Error>;
+    /// Load all chores, including soft-deleted records, in display order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when persistence cannot be read.
+    fn list_chores(&mut self) -> Result<Vec<Chore>, Self::Error>;
+    /// Disable a chore effective today.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when the transaction fails.
+    fn disable_chore(&mut self, id: ChoreId) -> Result<(), Self::Error>;
+    /// Re-enable a chore effective today.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when the transaction fails.
+    fn enable_chore(&mut self, id: ChoreId) -> Result<(), Self::Error>;
+    /// Soft-delete a chore while retaining history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when the transaction fails.
+    fn delete_chore(&mut self, id: ChoreId) -> Result<(), Self::Error>;
 }
 
 /// Deterministic bridge between board commands and application operations.
@@ -63,6 +88,8 @@ pub struct BoardRuntime<A> {
     application: A,
     state: BoardState,
     editor: Option<EditorState>,
+    chore_list: Option<ChoreListState>,
+    confirm_delete: bool,
     status_persistent: bool,
 }
 
@@ -70,7 +97,13 @@ impl<A: BoardApplication> BoardRuntime<A> {
     /// Load and materialize the current week. A startup failure produces a
     /// usable empty board with persistent, actionable feedback.
     #[must_use]
-    pub fn new(mut application: A) -> Self {
+    pub fn new(application: A) -> Self {
+        Self::new_with_options(application, true)
+    }
+
+    /// Load the current week with explicit user-interface options.
+    #[must_use]
+    pub fn new_with_options(mut application: A, confirm_delete: bool) -> Self {
         let today = application.today();
         let week = IsoWeek::containing(today);
         let (state, status_persistent) = match application.load_week(week) {
@@ -86,6 +119,8 @@ impl<A: BoardApplication> BoardRuntime<A> {
             application,
             state,
             editor: None,
+            chore_list: None,
+            confirm_delete,
             status_persistent,
         }
     }
@@ -104,11 +139,25 @@ impl<A: BoardApplication> BoardRuntime<A> {
         self.editor.as_ref()
     }
 
+    #[must_use]
+    pub const fn chore_list(&self) -> Option<&ChoreListState> {
+        self.chore_list.as_ref()
+    }
+
+    pub fn chore_list_mut(&mut self) -> Option<&mut ChoreListState> {
+        self.chore_list.as_mut()
+    }
+
     /// Route a raw key to the active editor or the Weekly Board.
     pub fn handle_key(&mut self, key: KeyEvent, layout: BoardLayout) -> bool {
         if let Some(editor) = self.editor.as_mut() {
             let action = editor.handle_key(key);
             self.handle_editor_action(action);
+            return false;
+        }
+        if let Some(chore_list) = self.chore_list.as_mut() {
+            let action = chore_list.handle_key(key);
+            self.handle_chore_list_action(action);
             return false;
         }
         input_for_key(key).is_some_and(|input| self.handle_input(input, layout))
@@ -155,6 +204,22 @@ impl<A: BoardApplication> BoardRuntime<A> {
                         self.status_persistent = true;
                     }
                 }
+                false
+            }
+            Some(BoardCommand::DisableChore(id)) => {
+                self.apply_lifecycle(ChoreListAction::Disable(id));
+                false
+            }
+            Some(BoardCommand::DeleteChore(id)) => {
+                if self.confirm_delete {
+                    self.open_chore_list(Some(id));
+                } else {
+                    self.apply_lifecycle(ChoreListAction::Delete(id));
+                }
+                false
+            }
+            Some(BoardCommand::OpenChoreList) => {
+                self.open_chore_list(None);
                 false
             }
             Some(BoardCommand::Help) => {
@@ -264,6 +329,101 @@ impl<A: BoardApplication> BoardRuntime<A> {
             None => {}
         }
     }
+
+    fn open_chore_list(&mut self, delete_candidate: Option<ChoreId>) {
+        match self.application.list_chores() {
+            Ok(items) => {
+                let mut state = ChoreListState::new(items, self.confirm_delete);
+                if let Some(id) = delete_candidate {
+                    let _ = state.request_delete(id);
+                }
+                self.chore_list = Some(state);
+            }
+            Err(error) => {
+                tracing::error!(%error, "could not load chore list");
+                self.state.set_status(Some(
+                    "Error: Could not load chores; retry or run `chore doctor`.".to_owned(),
+                ));
+                self.status_persistent = true;
+            }
+        }
+    }
+
+    fn handle_chore_list_action(&mut self, action: Option<ChoreListAction>) {
+        match action {
+            Some(ChoreListAction::Close) => self.chore_list = None,
+            Some(ChoreListAction::Edit(id)) => match self.application.load_editor(id) {
+                Ok(record) => {
+                    self.chore_list = None;
+                    self.editor = Some(EditorState::edit(record));
+                }
+                Err(error) => self.set_list_error(error, "Could not load chore for editing."),
+            },
+            Some(ChoreListAction::Help) => {
+                if let Some(list) = self.chore_list.as_mut() {
+                    list.set_status(Some(
+                        "List: / filter; arrows/Vim move; Space lifecycle; D delete; x deleted; Esc back"
+                            .to_owned(),
+                    ));
+                }
+            }
+            Some(action @ (ChoreListAction::Disable(_)
+            | ChoreListAction::Enable(_)
+            | ChoreListAction::Delete(_))) => self.apply_lifecycle(action),
+            None => {}
+        }
+    }
+
+    fn apply_lifecycle(&mut self, action: ChoreListAction) {
+        let result = match action {
+            ChoreListAction::Disable(id) => self.application.disable_chore(id).map(|()| id),
+            ChoreListAction::Enable(id) => self.application.enable_chore(id).map(|()| id),
+            ChoreListAction::Delete(id) => self.application.delete_chore(id).map(|()| id),
+            _ => return,
+        };
+        let id = match result {
+            Ok(id) => id,
+            Err(error) => {
+                self.set_list_error(error, "Lifecycle change failed; nothing changed.");
+                return;
+            }
+        };
+        if let Some(list) = self.chore_list.as_mut() {
+            match self.application.list_chores() {
+                Ok(items) => list.replace_items(items),
+                Err(error) => {
+                    tracing::error!(%error, chore_id = %id, "saved lifecycle change but list refresh failed");
+                    list.set_status(Some("Saved, but list refresh failed; reopen the list.".to_owned()));
+                }
+            }
+        }
+        match self.application.load_week(self.state.week()) {
+            Ok(occurrences) => {
+                self.state.refresh_occurrences(occurrences, None);
+                if let Some(list) = self.chore_list.as_mut() {
+                    list.set_status(Some("Chore lifecycle updated.".to_owned()));
+                } else {
+                    self.state.set_status(Some("Chore lifecycle updated.".to_owned()));
+                }
+                self.status_persistent = false;
+            }
+            Err(error) => {
+                tracing::error!(%error, chore_id = %id, "saved lifecycle change but board refresh failed");
+                self.status_persistent = true;
+            }
+        }
+    }
+
+    fn set_list_error(&mut self, error: A::Error, message: &str) {
+        tracing::error!(%error, "chore list action failed");
+        if let Some(list) = self.chore_list.as_mut() {
+            list.set_status(Some(format!("Error: {message} Retry or run `chore doctor`.")));
+        } else {
+            self.state
+                .set_status(Some(format!("Error: {message} Retry or run `chore doctor`.")));
+        }
+        self.status_persistent = true;
+    }
 }
 
 fn load_error_message() -> String {
@@ -343,15 +503,23 @@ pub fn restore_terminal() -> io::Result<()> {
 ///
 /// Returns an I/O error when terminal setup or rendering fails. Cleanup still
 /// runs through the lifecycle guard.
-pub fn run<A: BoardApplication>(application: A) -> io::Result<()> {
+pub fn run<A: BoardApplication>(application: A, confirm_delete: bool) -> io::Result<()> {
     let _guard = TerminalGuard::enter(CrosstermControl)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-    let mut runtime = BoardRuntime::new(application);
+    let mut runtime = BoardRuntime::new_with_options(application, confirm_delete);
 
     loop {
         terminal.draw(|frame| {
             if let Some(editor) = runtime.editor() {
                 screens::editor::render(frame, frame.area(), editor);
+            } else if runtime.chore_list().is_some() {
+                screens::chore_list::render(
+                    frame,
+                    frame.area(),
+                    runtime
+                        .chore_list_mut()
+                        .expect("chore list presence was checked"),
+                );
             } else {
                 screens::board::render(frame, frame.area(), runtime.state_mut());
             }
@@ -384,8 +552,8 @@ mod tests {
     use crate::{
         app::editor::{ChoreSubmission, EditorRecord},
         domain::{
-            CalendarDate, ChoreId, ChoreName, IsoWeek, Occurrence, OccurrenceId, OccurrenceSeed,
-            OccurrenceState, ScheduleId, Timestamp,
+            CalendarDate, Chore, ChoreId, ChoreName, IsoWeek, Occurrence, OccurrenceId,
+            OccurrenceSeed, OccurrenceState, ScheduleId, Timestamp,
         },
         tui::model::{BoardInput, BoardLayout},
     };
@@ -450,6 +618,22 @@ mod tests {
         }
 
         fn save_editor(&mut self, _submission: ChoreSubmission) -> Result<ChoreId, Self::Error> {
+            Err(FakeError)
+        }
+
+        fn list_chores(&mut self) -> Result<Vec<Chore>, Self::Error> {
+            Ok(Vec::new())
+        }
+
+        fn disable_chore(&mut self, _id: ChoreId) -> Result<(), Self::Error> {
+            Err(FakeError)
+        }
+
+        fn enable_chore(&mut self, _id: ChoreId) -> Result<(), Self::Error> {
+            Err(FakeError)
+        }
+
+        fn delete_chore(&mut self, _id: ChoreId) -> Result<(), Self::Error> {
             Err(FakeError)
         }
     }
