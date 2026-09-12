@@ -8,8 +8,7 @@ use choretui::{
     config::{CONFIG_ENV, DATA_DIR_ENV},
     domain::{
         CalendarDate, ChoreName, IsoWeekday, Occurrence, OccurrenceState, RecurrenceInterval,
-        Timestamp,
-        ports::Clock,
+        Timestamp, ports::Clock,
     },
     storage::SqliteStore,
     tui::{
