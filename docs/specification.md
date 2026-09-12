@@ -471,16 +471,16 @@ A smoke test starts the binary against a temporary XDG tree, creates data throug
 
 Implementation is split into repository issues rather than performed under #1:
 
-1. Bootstrap Rust project, CI, diagnostics, and terminal lifecycle.
-2. Implement domain values, validation, ISO week behavior, and weekly statistics.
-3. Implement the pure recurrence engine and edge-case test suite.
-4. Implement SQLite schema, migrations, repositories, and occurrence materialization.
-5. Implement configuration loading and `doctor` CLI.
-6. Implement Weekly Board state, responsive rendering, and navigation.
-7. Implement completion toggle and consistent status/statistics refresh.
-8. Implement Chore Editor and schedule revision use cases.
-9. Implement Chore List, enable/disable, and soft deletion.
-10. Implement help, confirmations, error surfaces, and end-to-end quality gates.
+1. #3 — Bootstrap Rust project, CI, diagnostics, and terminal lifecycle.
+2. #4 — Implement domain values, validation, ISO week behavior, and weekly statistics.
+3. #5 — Implement the pure recurrence engine and edge-case test suite.
+4. #6 — Implement SQLite schema, migrations, repositories, and occurrence materialization.
+5. #7 — Implement configuration loading and `doctor` CLI.
+6. #8 — Implement Weekly Board state, responsive rendering, and navigation.
+7. #11 — Implement completion toggle and consistent status/statistics refresh.
+8. #9 — Implement Chore Editor and schedule revision use cases.
+9. #10 — Implement Chore List, enable/disable, and soft deletion.
+10. #12 — Implement help, confirmations, error surfaces, and end-to-end quality gates.
 
 Each ticket should deliver a vertically testable boundary and may be merged independently in this order. Tickets may refine internal APIs, but changing product behavior or persistence semantics in this specification requires an explicit decision recorded in #1 or a follow-up architecture decision.
 
