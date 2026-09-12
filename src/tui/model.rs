@@ -184,14 +184,12 @@ impl BoardState {
     /// Visible, non-skipped occurrences for one day in repository order.
     pub fn occurrences_for_day(&self, day: usize) -> impl Iterator<Item = &Occurrence> {
         let date = self.day_date(day);
-        self.occurrences
-            .iter()
-            .filter(move |item| {
-                item.due_date() == date
-                    && item.state() != OccurrenceState::Skipped
-                    && (self.show_completed
-                        || !matches!(item.state(), OccurrenceState::Completed { .. }))
-            })
+        self.occurrences.iter().filter(move |item| {
+            item.due_date() == date
+                && item.state() != OccurrenceState::Skipped
+                && (self.show_completed
+                    || !matches!(item.state(), OccurrenceState::Completed { .. }))
+        })
     }
 
     #[must_use]

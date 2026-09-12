@@ -45,9 +45,7 @@ impl HelpState {
         if matches!(key.kind, KeyEventKind::Release) {
             return false;
         }
-        let maximum = help_lines(self.context)
-            .len()
-            .saturating_sub(visible_rows);
+        let maximum = help_lines(self.context).len().saturating_sub(visible_rows);
         match key.code {
             KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => return true,
             KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
@@ -81,7 +79,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &HelpState) {
             }
         })
         .collect::<Vec<_>>();
-    let position = format!(" Help  {}/{} ", state.scroll.saturating_add(1), help_lines(state.context).len());
+    let position = format!(
+        " Help  {}/{} ",
+        state.scroll.saturating_add(1),
+        help_lines(state.context).len()
+    );
     frame.render_widget(
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(position)),
         area,

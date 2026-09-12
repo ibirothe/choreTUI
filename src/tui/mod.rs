@@ -523,10 +523,7 @@ pub fn restore_terminal() -> io::Result<()> {
 ///
 /// Returns an I/O error when terminal setup or rendering fails. Cleanup still
 /// runs through the lifecycle guard.
-pub fn run<A: BoardApplication>(
-    application: A,
-    config: crate::config::Config,
-) -> io::Result<()> {
+pub fn run<A: BoardApplication>(application: A, config: crate::config::Config) -> io::Result<()> {
     let _guard = TerminalGuard::enter(CrosstermControl)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut runtime = BoardRuntime::new_with_config(application, config);
