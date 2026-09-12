@@ -47,7 +47,7 @@ impl HelpState {
         }
         let maximum = help_lines(self.context).len().saturating_sub(visible_rows);
         match key.code {
-            KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => return true,
+            KeyCode::Char('?' | 'q') | KeyCode::Esc => return true,
             KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => {
                 self.scroll = self.scroll.saturating_add(1).min(maximum);
