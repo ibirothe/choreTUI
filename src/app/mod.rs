@@ -17,7 +17,9 @@ use crate::{
     tui::{self, BoardApplication},
 };
 
-use self::use_cases::{AtomicEditorStore, BoardDataError, EditorDataError, TransactionalStore, UseCases};
+use self::use_cases::{
+    AtomicEditorStore, BoardDataError, EditorDataError, TransactionalStore, UseCases,
+};
 
 /// Sanitizable application failure; detailed sources are logged by the TUI.
 #[derive(Debug, thiserror::Error)]

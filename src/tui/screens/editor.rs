@@ -248,7 +248,10 @@ impl EditorState {
 
     fn move_focus(&mut self, delta: isize) {
         let fields = self.fields();
-        let current = fields.iter().position(|field| *field == self.focus).unwrap_or(0);
+        let current = fields
+            .iter()
+            .position(|field| *field == self.focus)
+            .unwrap_or(0);
         let len = isize::try_from(fields.len()).unwrap_or(1);
         let next = (isize::try_from(current).unwrap_or(0) + delta).rem_euclid(len);
         self.focus = fields[usize::try_from(next).unwrap_or(0)];
@@ -333,14 +336,23 @@ impl EditorState {
     fn validate(&mut self) -> Option<ChoreSubmission> {
         self.errors.clear();
         self.save_error = None;
-        let name = ChoreName::new(self.values.name.clone()).map_err(|error| {
-            self.errors.insert(EditorField::Name, error.to_string());
-        }).ok();
-        let description = Description::optional(self.values.description.clone()).map_err(|error| {
-            self.errors.insert(EditorField::Description, error.to_string());
-        }).ok();
+        let name = ChoreName::new(self.values.name.clone())
+            .map_err(|error| {
+                self.errors.insert(EditorField::Name, error.to_string());
+            })
+            .ok();
+        let description = Description::optional(self.values.description.clone())
+            .map_err(|error| {
+                self.errors
+                    .insert(EditorField::Description, error.to_string());
+            })
+            .ok();
         let pattern = self.validate_pattern();
-        if let Some(first) = self.fields().into_iter().find(|field| self.errors.contains_key(field)) {
+        if let Some(first) = self
+            .fields()
+            .into_iter()
+            .find(|field| self.errors.contains_key(field))
+        {
             self.focus = first;
             return None;
         }
@@ -348,7 +360,10 @@ impl EditorState {
             return None;
         };
         Some(ChoreSubmission {
-            id: match self.mode { EditorMode::Add => None, EditorMode::Edit(id) => Some(id) },
+            id: match self.mode {
+                EditorMode::Add => None,
+                EditorMode::Edit(id) => Some(id),
+            },
             name,
             description,
             enabled: self.values.enabled,
@@ -359,24 +374,41 @@ impl EditorState {
     fn validate_pattern(&mut self) -> Option<SchedulePattern> {
         match self.values.recurrence {
             RecurrenceChoice::Weekly => {
-                let interval = parse_interval(&self.values.interval).map_err(|message| {
-                    self.errors.insert(EditorField::Interval, message);
-                }).ok()?;
+                let interval = parse_interval(&self.values.interval)
+                    .map_err(|message| {
+                        self.errors.insert(EditorField::Interval, message);
+                    })
+                    .ok()?;
                 if self.values.weekdays.is_empty() {
-                    self.errors.insert(EditorField::Weekdays, "select at least one weekday".to_owned());
+                    self.errors.insert(
+                        EditorField::Weekdays,
+                        "select at least one weekday".to_owned(),
+                    );
                     return None;
                 }
-                Some(SchedulePattern::Weekly { interval, weekdays: self.values.weekdays.iter().copied().collect() })
+                Some(SchedulePattern::Weekly {
+                    interval,
+                    weekdays: self.values.weekdays.iter().copied().collect(),
+                })
             }
             RecurrenceChoice::Daily => parse_interval(&self.values.interval)
                 .map(|interval| SchedulePattern::DailyInterval { interval })
-                .map_err(|message| { self.errors.insert(EditorField::Interval, message); })
+                .map_err(|message| {
+                    self.errors.insert(EditorField::Interval, message);
+                })
                 .ok(),
-            RecurrenceChoice::Monthly => self.values.monthly_day.parse::<u8>()
-                .ok().and_then(|value| MonthlyDay::new(value).ok())
+            RecurrenceChoice::Monthly => self
+                .values
+                .monthly_day
+                .parse::<u8>()
+                .ok()
+                .and_then(|value| MonthlyDay::new(value).ok())
                 .map(|day| SchedulePattern::Monthly { day })
                 .or_else(|| {
-                    self.errors.insert(EditorField::MonthlyDay, "monthly day must be between 1 and 31".to_owned());
+                    self.errors.insert(
+                        EditorField::MonthlyDay,
+                        "monthly day must be between 1 and 31".to_owned(),
+                    );
                     None
                 }),
         }
@@ -384,7 +416,10 @@ impl EditorState {
 }
 
 fn parse_interval(value: &str) -> Result<RecurrenceInterval, String> {
-    value.parse::<u16>().ok().and_then(|value| RecurrenceInterval::new(value).ok())
+    value
+        .parse::<u16>()
+        .ok()
+        .and_then(|value| RecurrenceInterval::new(value).ok())
         .ok_or_else(|| "interval must be between 1 and 999".to_owned())
 }
 
@@ -395,59 +430,150 @@ fn change_number(value: &mut String, delta: i16, minimum: i16, maximum: i16) {
 
 /// Render the editor and its dirty-cancel confirmation.
 pub fn render(frame: &mut Frame<'_>, area: Rect, state: &EditorState) {
-    let title = match state.mode { EditorMode::Add => " Add Chore ", EditorMode::Edit(_) => " Edit Chore — recurrence effective today " };
-    let recurrence = match state.values.recurrence { RecurrenceChoice::Weekly => "Weekly", RecurrenceChoice::Daily => "Every N days", RecurrenceChoice::Monthly => "Monthly" };
-    let weekday_text = WEEKDAYS.iter().enumerate().map(|(index, day)| {
-        let mark = if state.values.weekdays.contains(day) { 'x' } else { ' ' };
-        let cursor = if state.weekday_cursor == index { '>' } else { ' ' };
-        format!("{cursor}[{mark}]{}", ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"][index])
-    }).collect::<Vec<_>>().join(" ");
+    let title = match state.mode {
+        EditorMode::Add => " Add Chore ",
+        EditorMode::Edit(_) => " Edit Chore — recurrence effective today ",
+    };
+    let recurrence = match state.values.recurrence {
+        RecurrenceChoice::Weekly => "Weekly",
+        RecurrenceChoice::Daily => "Every N days",
+        RecurrenceChoice::Monthly => "Monthly",
+    };
+    let weekday_text = WEEKDAYS
+        .iter()
+        .enumerate()
+        .map(|(index, day)| {
+            let mark = if state.values.weekdays.contains(day) {
+                'x'
+            } else {
+                ' '
+            };
+            let cursor = if state.weekday_cursor == index {
+                '>'
+            } else {
+                ' '
+            };
+            format!(
+                "{cursor}[{mark}]{}",
+                ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"][index]
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut lines = vec![
         field_line(state, EditorField::Name, "Name", &state.values.name),
-        field_line(state, EditorField::Description, "Description", &state.values.description),
+        field_line(
+            state,
+            EditorField::Description,
+            "Description",
+            &state.values.description,
+        ),
         field_line(state, EditorField::Recurrence, "Recurrence", recurrence),
     ];
     match state.values.recurrence {
         RecurrenceChoice::Weekly => {
-            lines.push(field_line(state, EditorField::Interval, "Every N weeks", &state.values.interval));
-            lines.push(field_line(state, EditorField::Weekdays, "Weekdays", &weekday_text));
+            lines.push(field_line(
+                state,
+                EditorField::Interval,
+                "Every N weeks",
+                &state.values.interval,
+            ));
+            lines.push(field_line(
+                state,
+                EditorField::Weekdays,
+                "Weekdays",
+                &weekday_text,
+            ));
         }
-        RecurrenceChoice::Daily => lines.push(field_line(state, EditorField::Interval, "Every N days", &state.values.interval)),
-        RecurrenceChoice::Monthly => lines.push(field_line(state, EditorField::MonthlyDay, "Day of month", &state.values.monthly_day)),
+        RecurrenceChoice::Daily => lines.push(field_line(
+            state,
+            EditorField::Interval,
+            "Every N days",
+            &state.values.interval,
+        )),
+        RecurrenceChoice::Monthly => lines.push(field_line(
+            state,
+            EditorField::MonthlyDay,
+            "Day of month",
+            &state.values.monthly_day,
+        )),
     }
-    lines.push(field_line(state, EditorField::Enabled, "Enabled", if state.values.enabled { "[x]" } else { "[ ]" }));
+    lines.push(field_line(
+        state,
+        EditorField::Enabled,
+        "Enabled",
+        if state.values.enabled { "[x]" } else { "[ ]" },
+    ));
     lines.push(Line::from(""));
     lines.push(field_line(state, EditorField::Save, "", "[ Save ]"));
     lines.push(field_line(state, EditorField::Cancel, "", "[ Cancel ]"));
     if let Some(error) = state.save_error() {
-        lines.push(Line::styled(error.to_owned(), Style::default().fg(Color::Red)));
+        lines.push(Line::styled(
+            error.to_owned(),
+            Style::default().fg(Color::Red),
+        ));
     }
-    lines.push(Line::from("Tab focus  Arrows choose  Space toggle  Ctrl+S save  Esc cancel"));
-    frame.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title)).wrap(Wrap { trim: false }), area);
+    lines.push(Line::from(
+        "Tab focus  Arrows choose  Space toggle  Ctrl+S save  Esc cancel",
+    ));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title(title))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
     if state.confirming_cancel {
         let popup = centered(area, 48, 5);
         frame.render_widget(Clear, popup);
-        frame.render_widget(Paragraph::new("Discard unsaved changes?\nEnter/y: discard   Esc/n: keep editing").block(Block::default().borders(Borders::ALL).title(" Confirm cancel ")), popup);
+        frame.render_widget(
+            Paragraph::new("Discard unsaved changes?\nEnter/y: discard   Esc/n: keep editing")
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Confirm cancel "),
+                ),
+            popup,
+        );
     }
 }
 
 fn field_line<'a>(state: &EditorState, field: EditorField, label: &str, value: &str) -> Line<'a> {
     let cursor = if state.focus == field { ">" } else { " " };
-    let error = state.error(field).map_or_else(String::new, |message| format!("  Error: {message}"));
-    let style = if state.focus == field { Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD) } else { Style::default() };
+    let error = state
+        .error(field)
+        .map_or_else(String::new, |message| format!("  Error: {message}"));
+    let style = if state.focus == field {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    };
     Line::styled(format!("{cursor} {label}: {value}{error}"), style)
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let vertical = Layout::vertical([Constraint::Fill(1), Constraint::Length(height.min(area.height)), Constraint::Fill(1)]).split(area);
-    Layout::horizontal([Constraint::Fill(1), Constraint::Length(width.min(area.width)), Constraint::Fill(1)]).split(vertical[1])[1]
+    let vertical = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(height.min(area.height)),
+        Constraint::Fill(1),
+    ])
+    .split(area);
+    Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(width.min(area.width)),
+        Constraint::Fill(1),
+    ])
+    .split(vertical[1])[1]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn key(code: KeyCode) -> KeyEvent { KeyEvent::new(code, KeyModifiers::NONE) }
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
 
     #[test]
     fn add_preselects_board_weekday_and_validates_name_inline() {
@@ -458,8 +584,12 @@ mod tests {
         assert!(state.error(EditorField::Name).is_some());
         state.values.name = "Bins".to_owned();
         state.focus = EditorField::Save;
-        let Some(EditorAction::Save(submission)) = state.handle_key(key(KeyCode::Enter)) else { panic!("valid form should save") };
-        assert!(matches!(submission.pattern, SchedulePattern::Weekly { weekdays, .. } if weekdays == vec![IsoWeekday::Thursday]));
+        let Some(EditorAction::Save(submission)) = state.handle_key(key(KeyCode::Enter)) else {
+            panic!("valid form should save")
+        };
+        assert!(
+            matches!(submission.pattern, SchedulePattern::Weekly { weekdays, .. } if weekdays == vec![IsoWeekday::Thursday])
+        );
     }
 
     #[test]
@@ -471,6 +601,9 @@ mod tests {
         assert_eq!(state.handle_key(key(KeyCode::Char('n'))), None);
         assert!(!state.is_confirming_cancel());
         state.handle_key(key(KeyCode::Esc));
-        assert_eq!(state.handle_key(key(KeyCode::Char('y'))), Some(EditorAction::Close));
+        assert_eq!(
+            state.handle_key(key(KeyCode::Char('y'))),
+            Some(EditorAction::Close)
+        );
     }
 }

@@ -59,8 +59,11 @@ pub trait AtomicEditorStore {
     /// # Errors
     ///
     /// Returns the adapter error and rolls back both records when persistence fails.
-    fn create_editor_chore(&mut self, chore: &Chore, schedule: &Schedule)
-        -> Result<(), Self::Error>;
+    fn create_editor_chore(
+        &mut self,
+        chore: &Chore,
+        schedule: &Schedule,
+    ) -> Result<(), Self::Error>;
 
     /// Persist metadata, lifecycle and optional schedule revision atomically.
     ///
@@ -304,8 +307,8 @@ where
             .into_iter()
             .last()
             .ok_or(EditorDataError::MissingSchedule)?;
-        let pattern = SchedulePattern::from_schedule(&schedule)
-            .ok_or(EditorDataError::MissingSchedule)?;
+        let pattern =
+            SchedulePattern::from_schedule(&schedule).ok_or(EditorDataError::MissingSchedule)?;
         Ok(EditorRecord {
             id: chore.id(),
             name: chore.name().clone(),
@@ -328,10 +331,18 @@ where
         let now = self.clock.now();
         if let Some(chore_id) = submission.id {
             let current = self.load_editor(chore_id)?;
-            let needs_schedule = current.pattern != submission.pattern
-                || (!current.enabled && submission.enabled);
+            let needs_schedule =
+                current.pattern != submission.pattern || (!current.enabled && submission.enabled);
             let replacement = needs_schedule
-                .then(|| build_schedule(chore_id, &submission.pattern, today, now, submission.enabled))
+                .then(|| {
+                    build_schedule(
+                        chore_id,
+                        &submission.pattern,
+                        today,
+                        now,
+                        submission.enabled,
+                    )
+                })
                 .transpose()?;
             self.persistence
                 .update_editor_chore(EditorUpdate {
@@ -351,7 +362,13 @@ where
             if !submission.enabled {
                 let _ = chore.set_enabled(false, now);
             }
-            let schedule = build_schedule(chore_id, &submission.pattern, today, now, submission.enabled)?;
+            let schedule = build_schedule(
+                chore_id,
+                &submission.pattern,
+                today,
+                now,
+                submission.enabled,
+            )?;
             self.persistence
                 .create_editor_chore(&chore, &schedule)
                 .map_err(EditorDataError::Persistence)?;
@@ -371,7 +388,11 @@ fn build_schedule(
     let window = ScheduleWindow::new(today, today, until, now)?;
     Ok(match pattern {
         SchedulePattern::Weekly { interval, weekdays } => Schedule::weekly(
-            ScheduleId::new(), chore_id, *interval, weekdays.iter().copied(), window,
+            ScheduleId::new(),
+            chore_id,
+            *interval,
+            weekdays.iter().copied(),
+            window,
         )?,
         SchedulePattern::DailyInterval { interval } => {
             Schedule::daily_interval(ScheduleId::new(), chore_id, *interval, window)
@@ -622,23 +643,22 @@ mod tests {
         );
 
         let (store, _) = application.into_parts();
-        let weekly_revisions = ScheduleRepository::for_chore(&store, weekly)
-            .expect("weekly revisions should load");
+        let weekly_revisions =
+            ScheduleRepository::for_chore(&store, weekly).expect("weekly revisions should load");
         assert_eq!(weekly_revisions.len(), 2);
         assert_eq!(
             weekly_revisions.last().map(Schedule::kind),
             Some(RecurrenceKind::DailyInterval)
         );
         assert_eq!(
-            ScheduleRepository::for_chore(&store, daily)
-                .expect("daily schedule should load")[0]
+            ScheduleRepository::for_chore(&store, daily).expect("daily schedule should load")[0]
                 .kind(),
             RecurrenceKind::DailyInterval
         );
         assert_eq!(
-            ScheduleRepository::for_chore(&store, monthly)
-                .expect("monthly schedule should load")[0]
-                .kind(),
+            ScheduleRepository::for_chore(&store, monthly).expect("monthly schedule should load")
+                [0]
+            .kind(),
             RecurrenceKind::Monthly
         );
     }

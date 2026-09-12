@@ -483,10 +483,10 @@ impl AtomicEditorStore for SqliteStore {
         )?;
 
         let active = active_schedule(&transaction, update.chore_id)?;
-        if update.replacement.is_some() || (was_enabled && !update.enabled) {
-            if let Some(schedule) = active.as_ref() {
-                close_schedule(&transaction, schedule, update.today)?;
-            }
+        if (update.replacement.is_some() || (was_enabled && !update.enabled))
+            && let Some(schedule) = active.as_ref()
+        {
+            close_schedule(&transaction, schedule, update.today)?;
         }
         if !was_enabled && update.enabled && update.replacement.is_none() {
             return Err(SqliteError::MissingActiveSchedule);
@@ -1576,9 +1576,7 @@ mod tests {
                 .expect("window should be valid"),
         );
 
-        assert!(
-            AtomicEditorStore::create_editor_chore(&mut store, &chore, &schedule).is_err()
-        );
+        assert!(AtomicEditorStore::create_editor_chore(&mut store, &chore, &schedule).is_err());
         assert!(
             ChoreRepository::find(&store, chore.id())
                 .expect("lookup should succeed")

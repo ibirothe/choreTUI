@@ -230,33 +230,37 @@ impl<A: BoardApplication> BoardRuntime<A> {
     fn handle_editor_action(&mut self, action: Option<EditorAction>) {
         match action {
             Some(EditorAction::Close) => self.editor = None,
-            Some(EditorAction::Save(submission)) => match self.application.save_editor(submission) {
-                Ok(id) => {
-                    self.editor = None;
-                    match self.application.load_week(self.state.week()) {
-                        Ok(occurrences) => {
-                            self.state.refresh_occurrences(occurrences, None);
-                            self.state.set_status(Some("Chore saved.".to_owned()));
-                            self.status_persistent = false;
+            Some(EditorAction::Save(submission)) => {
+                match self.application.save_editor(submission) {
+                    Ok(id) => {
+                        self.editor = None;
+                        match self.application.load_week(self.state.week()) {
+                            Ok(occurrences) => {
+                                self.state.refresh_occurrences(occurrences, None);
+                                self.state.set_status(Some("Chore saved.".to_owned()));
+                                self.status_persistent = false;
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, chore_id = %id, "saved chore but refresh failed");
+                                self.state.set_status(Some(
+                                    "Saved, but refresh failed; reopen the week or run `chore doctor`."
+                                        .to_owned(),
+                                ));
+                                self.status_persistent = true;
+                            }
                         }
-                        Err(error) => {
-                            tracing::error!(%error, chore_id = %id, "saved chore but refresh failed");
-                            self.state.set_status(Some(
-                                "Saved, but refresh failed; reopen the week or run `chore doctor`.".to_owned(),
-                            ));
-                            self.status_persistent = true;
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "could not save chore editor");
+                        if let Some(editor) = self.editor.as_mut() {
+                            editor.set_save_error(
+                                "Could not save; nothing changed. Retry or run `chore doctor`."
+                                    .to_owned(),
+                            );
                         }
                     }
                 }
-                Err(error) => {
-                    tracing::error!(%error, "could not save chore editor");
-                    if let Some(editor) = self.editor.as_mut() {
-                        editor.set_save_error(
-                            "Could not save; nothing changed. Retry or run `chore doctor`.".to_owned(),
-                        );
-                    }
-                }
-            },
+            }
             None => {}
         }
     }
