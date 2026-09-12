@@ -518,11 +518,7 @@ fn weekday_text(state: &EditorState) -> String {
         .join(" ")
 }
 
-fn add_recurrence_lines(
-    lines: &mut Vec<Line<'static>>,
-    state: &EditorState,
-    weekday_text: &str,
-) {
+fn add_recurrence_lines(lines: &mut Vec<Line<'static>>, state: &EditorState, weekday_text: &str) {
     match state.values.recurrence {
         RecurrenceChoice::Weekly => {
             lines.push(field_line(
@@ -553,12 +549,7 @@ fn add_recurrence_lines(
     }
 }
 
-fn field_line(
-    state: &EditorState,
-    field: EditorField,
-    label: &str,
-    value: &str,
-) -> Line<'static> {
+fn field_line(state: &EditorState, field: EditorField, label: &str, value: &str) -> Line<'static> {
     let cursor = if state.focus == field { ">" } else { " " };
     let error = state
         .error(field)
