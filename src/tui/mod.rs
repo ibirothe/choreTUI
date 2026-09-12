@@ -4,7 +4,10 @@ pub mod model;
 pub mod screens;
 pub mod widgets;
 
-use std::io::{self, stdout};
+use std::{
+    fmt::Display,
+    io::{self, stdout},
+};
 
 use crossterm::{
     cursor::{Hide, Show},
@@ -15,6 +18,167 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use self::model::{BoardCommand, BoardLayout, BoardState, input_for_key};
+use crate::domain::{CalendarDate, IsoWeek, Occurrence, OccurrenceId, OccurrenceState};
+
+/// Application operations required by the Weekly Board event loop.
+pub trait BoardApplication {
+    /// Application-specific failure type; details are written to diagnostics.
+    type Error: Display;
+
+    fn today(&self) -> CalendarDate;
+    /// Materialize and load one displayed week.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when materialization or loading fails.
+    fn load_week(&mut self, week: IsoWeek) -> Result<Vec<Occurrence>, Self::Error>;
+    /// Atomically toggle one occurrence and return its persisted new state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when the transaction fails.
+    fn toggle_completion(&mut self, id: OccurrenceId) -> Result<Occurrence, Self::Error>;
+}
+
+/// Deterministic bridge between board commands and application operations.
+pub struct BoardRuntime<A> {
+    application: A,
+    state: BoardState,
+    status_persistent: bool,
+}
+
+impl<A: BoardApplication> BoardRuntime<A> {
+    /// Load and materialize the current week. A startup failure produces a
+    /// usable empty board with persistent, actionable feedback.
+    #[must_use]
+    pub fn new(mut application: A) -> Self {
+        let today = application.today();
+        let week = IsoWeek::containing(today);
+        let (state, status_persistent) = match application.load_week(week) {
+            Ok(occurrences) => (BoardState::new(week, today, occurrences), false),
+            Err(error) => {
+                tracing::error!(%error, %week, "could not load initial board week");
+                let mut state = BoardState::new(week, today, Vec::new());
+                state.set_status(Some(load_error_message()));
+                (state, true)
+            }
+        };
+        Self {
+            application,
+            state,
+            status_persistent,
+        }
+    }
+
+    #[must_use]
+    pub const fn state(&self) -> &BoardState {
+        &self.state
+    }
+
+    pub const fn state_mut(&mut self) -> &mut BoardState {
+        &mut self.state
+    }
+
+    /// Apply an input and return `true` only when the application should quit.
+    pub fn handle_input(&mut self, input: model::BoardInput, layout: BoardLayout) -> bool {
+        if !self.status_persistent {
+            self.state.set_status(None);
+        }
+        let command = match self.state.handle_input(input, layout) {
+            Ok(command) => command,
+            Err(error) => {
+                tracing::error!(%error, "week navigation failed");
+                self.state.set_status(Some(
+                    "Error: Week is outside the supported range; choose another week.".to_owned(),
+                ));
+                self.status_persistent = true;
+                return false;
+            }
+        };
+        match command {
+            Some(BoardCommand::Quit) => true,
+            Some(BoardCommand::LoadWeek(week)) => {
+                self.load_week(week);
+                false
+            }
+            Some(BoardCommand::ToggleCompletion(id)) => {
+                self.toggle_completion(id);
+                false
+            }
+            Some(BoardCommand::Help) => {
+                self.state.set_status(Some(
+                    "Board: arrows/Vim navigate; [/] weeks; Space toggles; q quits".to_owned(),
+                ));
+                self.status_persistent = false;
+                false
+            }
+            Some(_) => {
+                self.state
+                    .set_status(Some("Action ready for the application layer".to_owned()));
+                self.status_persistent = false;
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Consume the runtime, primarily for deterministic integration tests.
+    pub fn into_parts(self) -> (A, BoardState) {
+        (self.application, self.state)
+    }
+
+    fn load_week(&mut self, week: IsoWeek) {
+        match self.application.load_week(week) {
+            Ok(occurrences) => {
+                self.state.replace_week(week, occurrences);
+                self.state.set_status(None);
+                self.status_persistent = false;
+            }
+            Err(error) => {
+                tracing::error!(%error, %week, "could not load board week");
+                self.state.set_status(Some(load_error_message()));
+                self.status_persistent = true;
+            }
+        }
+    }
+
+    fn toggle_completion(&mut self, id: OccurrenceId) {
+        let updated = match self.application.toggle_completion(id) {
+            Ok(updated) => updated,
+            Err(error) => {
+                tracing::error!(%error, occurrence_id = %id, "could not toggle occurrence");
+                self.state.set_status(Some(
+                    "Error: Chore was not changed; retry or run `chore doctor`.".to_owned(),
+                ));
+                self.status_persistent = true;
+                return;
+            }
+        };
+        match self.application.load_week(self.state.week()) {
+            Ok(occurrences) => {
+                self.state.refresh_occurrences(occurrences, Some(id));
+                let message = match updated.state() {
+                    OccurrenceState::Completed { .. } => "Chore marked complete.",
+                    OccurrenceState::Pending => "Chore marked pending.",
+                    OccurrenceState::Skipped => "Chore state refreshed.",
+                };
+                self.state.set_status(Some(message.to_owned()));
+                self.status_persistent = false;
+            }
+            Err(error) => {
+                tracing::error!(%error, occurrence_id = %id, "saved toggle but refresh failed");
+                self.state.set_status(Some(
+                    "Saved, but refresh failed; reopen the week or run `chore doctor`.".to_owned(),
+                ));
+                self.status_persistent = true;
+            }
+        }
+    }
+}
+
+fn load_error_message() -> String {
+    "Error: Could not load week; current board kept. Retry or run `chore doctor`.".to_owned()
+}
 
 trait TerminalControl {
     fn enter(&mut self) -> io::Result<()>;
@@ -89,12 +253,13 @@ pub fn restore_terminal() -> io::Result<()> {
 ///
 /// Returns an I/O error when terminal setup or rendering fails. Cleanup still
 /// runs through the lifecycle guard.
-pub fn run(mut state: BoardState) -> io::Result<()> {
+pub fn run<A: BoardApplication>(application: A) -> io::Result<()> {
     let _guard = TerminalGuard::enter(CrosstermControl)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    let mut runtime = BoardRuntime::new(application);
 
     loop {
-        terminal.draw(|frame| screens::board::render(frame, frame.area(), &mut state))?;
+        terminal.draw(|frame| screens::board::render(frame, frame.area(), runtime.state_mut()))?;
         let Event::Key(key) = read()? else {
             continue;
         };
@@ -103,17 +268,8 @@ pub fn run(mut state: BoardState) -> io::Result<()> {
         };
         let area = terminal.size()?;
         let layout = BoardLayout::for_size(area.width, area.height);
-        match state.handle_input(input, layout) {
-            Ok(Some(BoardCommand::Quit)) => break,
-            Ok(Some(BoardCommand::LoadWeek(week))) => state.replace_week(week, Vec::new()),
-            Ok(Some(BoardCommand::Help)) => state.set_status(Some(
-                "Board: arrows/Vim navigate; [/] weeks; Space toggles; q quits".to_owned(),
-            )),
-            Ok(Some(_)) => {
-                state.set_status(Some("Action ready for the application layer".to_owned()));
-            }
-            Ok(None) => state.set_status(None),
-            Err(error) => state.set_status(Some(error.to_string())),
+        if runtime.handle_input(input, layout) {
+            break;
         }
     }
 
@@ -123,7 +279,7 @@ pub fn run(mut state: BoardState) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::{
-        io,
+        fmt, io,
         panic::{AssertUnwindSafe, catch_unwind},
         sync::{
             Arc,
@@ -131,11 +287,90 @@ mod tests {
         },
     };
 
-    use super::{TerminalControl, TerminalGuard};
+    use super::{BoardApplication, BoardRuntime, TerminalControl, TerminalGuard};
+    use crate::{
+        domain::{
+            CalendarDate, ChoreId, ChoreName, IsoWeek, Occurrence, OccurrenceId, OccurrenceSeed,
+            OccurrenceState, ScheduleId, Timestamp,
+        },
+        tui::model::{BoardInput, BoardLayout},
+    };
 
     struct FakeControl {
         enter_count: Arc<AtomicUsize>,
         restore_count: Arc<AtomicUsize>,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct FakeError;
+
+    impl fmt::Display for FakeError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("injected transaction failure")
+        }
+    }
+
+    struct FakeApplication {
+        today: CalendarDate,
+        occurrences: Vec<Occurrence>,
+        fail_toggle: bool,
+        fail_load: bool,
+    }
+
+    impl BoardApplication for FakeApplication {
+        type Error = FakeError;
+
+        fn today(&self) -> CalendarDate {
+            self.today
+        }
+
+        fn load_week(&mut self, week: IsoWeek) -> Result<Vec<Occurrence>, Self::Error> {
+            if self.fail_load {
+                Err(FakeError)
+            } else {
+                Ok(self
+                    .occurrences
+                    .iter()
+                    .filter(|item| week.contains(item.due_date()))
+                    .cloned()
+                    .collect())
+            }
+        }
+
+        fn toggle_completion(&mut self, id: OccurrenceId) -> Result<Occurrence, Self::Error> {
+            if self.fail_toggle {
+                return Err(FakeError);
+            }
+            let item = self
+                .occurrences
+                .iter_mut()
+                .find(|item| item.id() == id)
+                .ok_or(FakeError)?;
+            item.toggle_completion(timestamp(50))
+                .map_err(|_| FakeError)?;
+            Ok(item.clone())
+        }
+    }
+
+    fn date(year: i32, month: u8, day: u8) -> CalendarDate {
+        CalendarDate::new(year, month, day).expect("test date should be valid")
+    }
+
+    fn timestamp(seconds: i64) -> Timestamp {
+        Timestamp::from_unix_timestamp(seconds).expect("test timestamp should be valid")
+    }
+
+    fn occurrence(due: CalendarDate) -> Occurrence {
+        Occurrence::pending(OccurrenceSeed {
+            id: OccurrenceId::new(),
+            chore_id: ChoreId::new(),
+            schedule_id: ScheduleId::new(),
+            nominal_date: due,
+            due_date: due,
+            name: ChoreName::new("Laundry").expect("test name should be valid"),
+            description: None,
+            created_at: timestamp(1),
+        })
     }
 
     impl TerminalControl for FakeControl {
@@ -183,5 +418,91 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(observed_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn successful_toggle_reloads_state_statistics_and_keeps_selection() {
+        let monday = date(2026, 9, 7);
+        let item = occurrence(monday);
+        let id = item.id();
+        let application = FakeApplication {
+            today: monday,
+            occurrences: vec![item],
+            fail_toggle: false,
+            fail_load: false,
+        };
+        let mut runtime = BoardRuntime::new(application);
+
+        assert_eq!(runtime.state().statistics().completed(), 0);
+        runtime.handle_input(BoardInput::ToggleCompletion, BoardLayout::SevenColumns);
+
+        assert_eq!(
+            runtime.state().selected_occurrence().map(Occurrence::id),
+            Some(id)
+        );
+        assert!(matches!(
+            runtime.state().selected_occurrence().map(Occurrence::state),
+            Some(OccurrenceState::Completed { .. })
+        ));
+        assert_eq!(runtime.state().statistics().completed(), 1);
+        assert_eq!(runtime.state().status(), Some("Chore marked complete."));
+        runtime.handle_input(BoardInput::NextOccurrence, BoardLayout::SevenColumns);
+        assert_eq!(runtime.state().status(), None);
+    }
+
+    #[test]
+    fn failed_toggle_keeps_persisted_view_and_error_visible_during_navigation() {
+        let monday = date(2026, 9, 7);
+        let application = FakeApplication {
+            today: monday,
+            occurrences: vec![occurrence(monday)],
+            fail_toggle: true,
+            fail_load: false,
+        };
+        let mut runtime = BoardRuntime::new(application);
+
+        runtime.handle_input(BoardInput::ToggleCompletion, BoardLayout::SevenColumns);
+        assert_eq!(
+            runtime.state().selected_occurrence().map(Occurrence::state),
+            Some(OccurrenceState::Pending)
+        );
+        let error = runtime.state().status().map(str::to_owned);
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|message| message.contains("not changed"))
+        );
+
+        runtime.handle_input(BoardInput::NextOccurrence, BoardLayout::SevenColumns);
+        assert_eq!(runtime.state().status(), error.as_deref());
+    }
+
+    #[test]
+    fn failed_week_load_keeps_previous_week_and_data() {
+        let monday = date(2026, 9, 7);
+        let application = FakeApplication {
+            today: monday,
+            occurrences: vec![occurrence(monday)],
+            fail_toggle: false,
+            fail_load: false,
+        };
+        let mut runtime = BoardRuntime::new(application);
+        let old_week = runtime.state().week();
+        let old_id = runtime.state().selected_occurrence().map(Occurrence::id);
+        runtime.application.fail_load = true;
+
+        runtime.handle_input(BoardInput::NextWeek, BoardLayout::SevenColumns);
+
+        assert_eq!(runtime.state().week(), old_week);
+        assert_eq!(
+            runtime.state().selected_occurrence().map(Occurrence::id),
+            old_id
+        );
+        assert!(
+            runtime
+                .state()
+                .status()
+                .is_some_and(|message| message.contains("current board kept"))
+        );
     }
 }
