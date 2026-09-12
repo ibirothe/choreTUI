@@ -56,11 +56,11 @@ fn run_interactive(paths: &AppPaths) -> Result<()> {
         config = %paths.config_file().display(),
         "resolved application paths"
     );
-    let _store = SqliteStore::open(paths.database_file()).with_context(|| {
+    let store = SqliteStore::open(paths.database_file()).with_context(|| {
         format!(
             "could not open database {} without risking data loss",
             paths.database_file().display()
         )
     })?;
-    choretui::app::run().context("interactive application failed")
+    choretui::app::run(store).context("interactive application failed")
 }

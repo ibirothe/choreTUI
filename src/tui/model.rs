@@ -308,6 +308,24 @@ impl BoardState {
         self.select_preferred_occurrence();
     }
 
+    /// Replace occurrences after a mutation while retaining the same item when
+    /// it remains present on the selected day.
+    pub fn refresh_occurrences(
+        &mut self,
+        occurrences: Vec<Occurrence>,
+        preferred: Option<OccurrenceId>,
+    ) {
+        self.occurrences = occurrences;
+        self.scroll_offsets = [0; 7];
+        self.selected_occurrence = preferred.and_then(|id| {
+            self.occurrences_for_day(self.selected_day)
+                .position(|item| item.id() == id)
+        });
+        if self.selected_occurrence.is_none() {
+            self.select_preferred_occurrence();
+        }
+    }
+
     fn move_day(&mut self, delta: i8) {
         self.selected_day = if delta < 0 {
             (self.selected_day + 6) % 7
