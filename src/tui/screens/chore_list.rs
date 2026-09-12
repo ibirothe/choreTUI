@@ -96,12 +96,12 @@ impl ChoreListState {
 
     #[must_use]
     pub const fn is_filtering(&self) -> bool {
-        self.input_mode == InputMode::Filter
+        matches!(self.input_mode, InputMode::Filter)
     }
 
     #[must_use]
     pub const fn shows_deleted(&self) -> bool {
-        self.deleted_view == DeletedView::All
+        matches!(self.deleted_view, DeletedView::All)
     }
 
     #[must_use]

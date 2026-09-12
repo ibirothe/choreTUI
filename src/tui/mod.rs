@@ -515,11 +515,7 @@ pub fn run<A: BoardApplication>(application: A, confirm_delete: bool) -> io::Res
             if let Some(editor) = runtime.editor() {
                 screens::editor::render(frame, frame.area(), editor);
             } else if let Some(chore_list) = runtime.chore_list_mut() {
-                screens::chore_list::render(
-                    frame,
-                    frame.area(),
-                    chore_list,
-                );
+                screens::chore_list::render(frame, frame.area(), chore_list);
             } else {
                 screens::board::render(frame, frame.area(), runtime.state_mut());
             }
