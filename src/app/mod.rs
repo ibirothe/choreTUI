@@ -1,5 +1,6 @@
 //! Application orchestration and semantic command dispatch.
 
+pub mod editor;
 pub mod use_cases;
 
 use std::io;
@@ -7,15 +8,25 @@ use std::io;
 use time::OffsetDateTime;
 
 use crate::{
+    app::editor::{ChoreSubmission, EditorRecord},
     domain::{
-        CalendarDate, Occurrence, OccurrenceId, Timestamp,
-        ports::{Clock, OccurrenceRepository},
+        CalendarDate, ChoreId, Occurrence, OccurrenceId, Timestamp,
+        ports::{ChoreRepository, Clock, OccurrenceRepository, ScheduleRepository},
     },
     storage::SqliteStore,
     tui::{self, BoardApplication},
 };
 
-use self::use_cases::{BoardDataError, TransactionalStore, UseCases};
+use self::use_cases::{AtomicEditorStore, BoardDataError, EditorDataError, TransactionalStore, UseCases};
+
+/// Sanitizable application failure; detailed sources are logged by the TUI.
+#[derive(Debug, thiserror::Error)]
+pub enum ApplicationError<E: std::error::Error + 'static> {
+    #[error(transparent)]
+    Board(#[from] BoardDataError<E>),
+    #[error(transparent)]
+    Editor(#[from] EditorDataError<E>),
+}
 
 /// Production wall clock with local-date and UTC-timestamp semantics.
 #[derive(Clone, Copy, Debug, Default)]
@@ -34,21 +45,35 @@ impl Clock for SystemClock {
 
 impl<P, C> BoardApplication for UseCases<P, C>
 where
-    P: TransactionalStore + OccurrenceRepository<Error = <P as TransactionalStore>::Error>,
+    P: TransactionalStore
+        + AtomicEditorStore<Error = <P as TransactionalStore>::Error>
+        + OccurrenceRepository<Error = <P as TransactionalStore>::Error>
+        + ChoreRepository<Error = <P as TransactionalStore>::Error>
+        + ScheduleRepository<Error = <P as TransactionalStore>::Error>,
     C: Clock,
 {
-    type Error = BoardDataError<<P as TransactionalStore>::Error>;
+    type Error = ApplicationError<<P as TransactionalStore>::Error>;
 
     fn today(&self) -> CalendarDate {
         Self::today(self)
     }
 
     fn load_week(&mut self, week: crate::domain::IsoWeek) -> Result<Vec<Occurrence>, Self::Error> {
-        Self::load_week(self, week)
+        Self::load_week(self, week).map_err(ApplicationError::Board)
     }
 
     fn toggle_completion(&mut self, id: OccurrenceId) -> Result<Occurrence, Self::Error> {
-        Self::toggle_completion(self, id).map_err(BoardDataError::Persistence)
+        Self::toggle_completion(self, id)
+            .map_err(BoardDataError::Persistence)
+            .map_err(ApplicationError::Board)
+    }
+
+    fn load_editor(&mut self, id: ChoreId) -> Result<EditorRecord, Self::Error> {
+        Self::load_editor(self, id).map_err(ApplicationError::Editor)
+    }
+
+    fn save_editor(&mut self, submission: ChoreSubmission) -> Result<ChoreId, Self::Error> {
+        Self::save_editor(self, submission).map_err(ApplicationError::Editor)
     }
 }
 
