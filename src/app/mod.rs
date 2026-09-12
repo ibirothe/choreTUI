@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use crate::{
     app::editor::{ChoreSubmission, EditorRecord},
     domain::{
-        CalendarDate, ChoreId, Occurrence, OccurrenceId, Timestamp,
+        CalendarDate, Chore, ChoreId, Occurrence, OccurrenceId, Timestamp,
         ports::{ChoreRepository, Clock, OccurrenceRepository, ScheduleRepository},
     },
     storage::SqliteStore,
@@ -77,6 +77,31 @@ where
     fn save_editor(&mut self, submission: ChoreSubmission) -> Result<ChoreId, Self::Error> {
         Self::save_editor(self, submission).map_err(ApplicationError::Editor)
     }
+
+    fn list_chores(&mut self) -> Result<Vec<Chore>, Self::Error> {
+        Self::list_chores(self, true)
+            .map_err(EditorDataError::Persistence)
+            .map_err(ApplicationError::Editor)
+    }
+
+    fn disable_chore(&mut self, id: ChoreId) -> Result<(), Self::Error> {
+        Self::disable_chore(self, id)
+            .map_err(BoardDataError::Persistence)
+            .map_err(ApplicationError::Board)
+    }
+
+    fn enable_chore(&mut self, id: ChoreId) -> Result<(), Self::Error> {
+        Self::reenable_chore(self, id)
+            .map(|_| ())
+            .map_err(BoardDataError::Persistence)
+            .map_err(ApplicationError::Board)
+    }
+
+    fn delete_chore(&mut self, id: ChoreId) -> Result<(), Self::Error> {
+        Self::soft_delete_chore(self, id)
+            .map_err(BoardDataError::Persistence)
+            .map_err(ApplicationError::Board)
+    }
 }
 
 /// Run the interactive application.
@@ -85,7 +110,7 @@ where
 ///
 /// Returns an I/O error when the terminal cannot be entered, rendered, or
 /// restored.
-pub fn run(store: SqliteStore) -> io::Result<()> {
+pub fn run(store: SqliteStore, config: crate::config::Config) -> io::Result<()> {
     tracing::info!("starting ChoreTUI");
-    tui::run(UseCases::new(store, SystemClock))
+    tui::run(UseCases::new(store, SystemClock), config.confirm_delete)
 }
