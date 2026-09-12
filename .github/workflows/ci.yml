@@ -9,6 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  pre-commit:
+    name: Pre-commit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install pre-commit
+        run: python -m pip install pre-commit==4.6.2
+      - name: Run pre-commit hooks
+        run: pre-commit run --all-files --show-diff-on-failure
+
   quality:
     name: Quality (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -31,4 +49,3 @@ jobs:
         run: cargo test --all-targets --all-features --locked
       - name: Build release binary
         run: cargo build --release --locked
-

@@ -30,7 +30,17 @@ cargo test --all-targets --all-features --locked
 cargo build --release --locked
 ```
 
-CI runs these checks on Linux, macOS, and Windows.
+Install the repository hooks once and run them explicitly when needed:
+
+```sh
+python -m pip install pre-commit==4.6.2
+pre-commit install
+pre-commit run --all-files
+```
+
+The pre-commit configuration runs formatting, strict Clippy, and tests with the
+locked dependency graph. CI executes the same hooks on Linux and the complete
+quality suite on Linux, macOS, and Windows.
 
 ## Source boundaries
 

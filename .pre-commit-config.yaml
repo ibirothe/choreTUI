@@ -1,0 +1,26 @@
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        types: [rust]
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --all-targets --all-features --locked -- -D warnings
+        language: system
+        pass_filenames: false
+        types: [rust]
+
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test --all-targets --all-features --locked
+        language: system
+        pass_filenames: false
+        types: [rust]
+
