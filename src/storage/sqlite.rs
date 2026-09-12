@@ -2,7 +2,7 @@
 
 use std::{path::Path, time::Duration as StdDuration};
 
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 use thiserror::Error;
 use time::{Date, Duration, format_description::well_known::Rfc3339, macros::format_description};
 use uuid::Uuid;
@@ -93,6 +93,17 @@ pub struct SqliteStore {
     connection: Connection,
 }
 
+/// Read-only database health details used by `chore doctor`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseDiagnostics {
+    /// Applied schema version.
+    pub schema_version: i64,
+    /// Whether foreign-key enforcement is active on the diagnostic connection.
+    pub foreign_keys: bool,
+    /// Rows returned by SQLite's integrity check.
+    pub integrity: Vec<String>,
+}
+
 impl SqliteStore {
     /// Open, configure, and migrate a database file.
     ///
@@ -121,6 +132,37 @@ impl SqliteStore {
         connection.busy_timeout(StdDuration::from_secs(5))?;
         migrations::migrate(&mut connection)?;
         Ok(Self { connection })
+    }
+
+    /// Inspect an existing database through a query-only connection without
+    /// running migrations or changing domain data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error for unavailable, locked, corrupt, or unsupported
+    /// databases.
+    pub fn inspect_read_only(path: impl AsRef<Path>) -> Result<DatabaseDiagnostics, SqliteError> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        connection.busy_timeout(StdDuration::from_secs(5))?;
+        connection.pragma_update(None, "query_only", "ON")?;
+        connection.pragma_update(None, "foreign_keys", "ON")?;
+        let schema_version = migrations::schema_version(&connection)?;
+        if schema_version > migrations::LATEST_VERSION {
+            return Err(SqliteError::NewerSchema {
+                found: schema_version,
+                supported: migrations::LATEST_VERSION,
+            });
+        }
+        let foreign_keys = connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+        let mut statement = connection.prepare("PRAGMA integrity_check")?;
+        let integrity = statement
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(DatabaseDiagnostics {
+            schema_version,
+            foreign_keys,
+            integrity,
+        })
     }
 
     /// Run SQLite's integrity check and return its diagnostic rows.
