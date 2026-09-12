@@ -7,7 +7,8 @@ use choretui::{
     },
     config::{CONFIG_ENV, DATA_DIR_ENV},
     domain::{
-        CalendarDate, ChoreName, IsoWeekday, OccurrenceState, RecurrenceInterval, Timestamp,
+        CalendarDate, ChoreName, IsoWeekday, Occurrence, OccurrenceState, RecurrenceInterval,
+        Timestamp,
         ports::Clock,
     },
     storage::SqliteStore,
@@ -66,7 +67,7 @@ fn primary_workflow_survives_restart_and_passes_doctor() {
     assert!(board.state().selected_occurrence().is_some());
     board.handle_input(BoardInput::ToggleCompletion, BoardLayout::SevenColumns);
     assert!(matches!(
-        board.state().selected_occurrence().map(|item| item.state()),
+        board.state().selected_occurrence().map(Occurrence::state),
         Some(OccurrenceState::Completed { .. })
     ));
     let (application, _) = board.into_parts();
@@ -85,7 +86,7 @@ fn primary_workflow_survives_restart_and_passes_doctor() {
         restarted
             .state()
             .selected_occurrence()
-            .map(|item| item.state()),
+            .map(Occurrence::state),
         Some(OccurrenceState::Completed { .. })
     ));
     drop(restarted);
