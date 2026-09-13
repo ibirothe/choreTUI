@@ -8,7 +8,7 @@ use std::io;
 use time::OffsetDateTime;
 
 use crate::{
-    app::editor::{ChoreSubmission, EditorRecord},
+    app::editor::{CatalogPlanningChore, ChoreSubmission, EditorRecord},
     domain::{
         CalendarDate, Chore, ChoreId, Occurrence, OccurrenceId, Timestamp,
         ports::{ChoreRepository, Clock, OccurrenceRepository, ScheduleRepository},
@@ -80,6 +80,11 @@ where
 
     fn list_chores(&mut self) -> Result<Vec<Chore>, Self::Error> {
         Self::list_chores(self, true)
+            .map_err(EditorDataError::Persistence)
+            .map_err(ApplicationError::Editor)
+    }
+    fn catalog_planning(&mut self) -> Result<Vec<CatalogPlanningChore>, Self::Error> {
+        Self::catalog_planning(self)
             .map_err(EditorDataError::Persistence)
             .map_err(ApplicationError::Editor)
     }

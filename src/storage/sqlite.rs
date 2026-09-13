@@ -8,7 +8,10 @@ use time::{Date, Duration, format_description::well_known::Rfc3339, macros::form
 use uuid::Uuid;
 
 use crate::{
-    app::use_cases::{AtomicEditorStore, EditorUpdate, TransactionalStore},
+    app::{
+        editor::TemplateProvenance,
+        use_cases::{AtomicEditorStore, EditorUpdate, TransactionalStore},
+    },
     domain::{
         CalendarDate, Chore, ChoreId, ChoreName, ChoreTimestamps, Description, IsoWeek, IsoWeekday,
         MonthlyDay, Occurrence, OccurrenceId, OccurrenceSeed, OccurrenceState, RecurrenceInterval,
@@ -432,6 +435,7 @@ impl AtomicEditorStore for SqliteStore {
         &mut self,
         chore: &Chore,
         schedule: &Schedule,
+        provenance: Option<&TemplateProvenance>,
     ) -> Result<(), Self::Error> {
         if schedule.chore_id() != chore.id() {
             return Err(SqliteError::ScheduleChoreMismatch);
@@ -442,8 +446,45 @@ impl AtomicEditorStore for SqliteStore {
         let transaction = self.connection.transaction()?;
         save_chore(&transaction, chore)?;
         insert_schedule(&transaction, schedule)?;
+        if let Some(provenance) = provenance {
+            transaction.execute(
+                "INSERT INTO chore_catalog_provenance(\
+                    chore_id, template_id, schema_version, catalog_version, locale, created_at\
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    chore.id().to_string(),
+                    provenance.template_id.as_str(),
+                    i64::from(provenance.schema_version),
+                    i64::from(provenance.catalog_version),
+                    provenance.locale.as_str(),
+                    format_timestamp(chore.timestamps().created_at)?,
+                ],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
+    }
+
+    fn catalog_provenance(
+        &self,
+        chore_id: ChoreId,
+    ) -> Result<Option<TemplateProvenance>, Self::Error> {
+        self.connection
+            .query_row(
+                "SELECT template_id, schema_version, catalog_version, locale \
+                 FROM chore_catalog_provenance WHERE chore_id = ?1",
+                [chore_id.to_string()],
+                |row| {
+                    Ok(TemplateProvenance {
+                        template_id: row.get(0)?,
+                        schema_version: row.get(1)?,
+                        catalog_version: row.get(2)?,
+                        locale: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(SqliteError::from)
     }
 
     fn update_editor_chore(&mut self, update: EditorUpdate<'_>) -> Result<(), Self::Error> {
@@ -1255,7 +1296,7 @@ mod tests {
                     row.get::<_, i64>(0)
                 })
                 .expect("migration count should load"),
-            1
+            migrations::LATEST_VERSION
         );
         assert_eq!(
             reopened.integrity_check().expect("check should run"),
@@ -1576,11 +1617,47 @@ mod tests {
                 .expect("window should be valid"),
         );
 
-        assert!(AtomicEditorStore::create_editor_chore(&mut store, &chore, &schedule).is_err());
+        assert!(
+            AtomicEditorStore::create_editor_chore(&mut store, &chore, &schedule, None).is_err()
+        );
         assert!(
             ChoreRepository::find(&store, chore.id())
                 .expect("lookup should succeed")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn editor_create_rolls_back_chore_and_schedule_when_provenance_insert_fails() {
+        let mut store = SqliteStore::open_in_memory().expect("database should open");
+        let chore = Chore::new(ChoreId::new(), name("Rollback"), None, timestamp(1));
+        let schedule = Schedule::daily_interval(
+            ScheduleId::new(),
+            chore.id(),
+            RecurrenceInterval::new(1).expect("interval should be valid"),
+            ScheduleWindow::new(date(2026, 9, 1), date(2026, 9, 1), None, timestamp(1))
+                .expect("window should be valid"),
+        );
+        let invalid = TemplateProvenance {
+            template_id: "bathroom.scrub_shower".to_owned(),
+            schema_version: 1,
+            catalog_version: 2,
+            locale: String::new(),
+        };
+
+        assert!(
+            AtomicEditorStore::create_editor_chore(&mut store, &chore, &schedule, Some(&invalid),)
+                .is_err()
+        );
+        assert!(
+            ChoreRepository::find(&store, chore.id())
+                .expect("lookup should succeed")
+                .is_none()
+        );
+        assert!(
+            ScheduleRepository::for_chore(&store, chore.id())
+                .expect("schedule lookup should succeed")
+                .is_empty()
         );
     }
 }

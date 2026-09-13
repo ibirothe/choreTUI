@@ -43,9 +43,11 @@ The editor uses `Tab`/`BackTab` for focus, arrows for choices, `Space` for check
 
 While adding a chore, press `F2` to browse the bundled activity catalog. Use
 `/` for incremental text search, `f` or `Tab` for facet filters, `Space` to
-toggle a filter value, `c` to clear all criteria, and `p` or `Enter` for the
-preview. Filters use OR within a dimension and AND across dimensions. Browsing
-and cancelling never create or change chores.
+toggle a filter value, `c` to clear all criteria, and `p` for the preview.
+Press `Enter` on a result to copy its editable defaults into the chore editor.
+Filters use OR within a dimension and AND across dimensions. Planned templates
+and possible same-name duplicates are marked; only an explicit Save creates a
+chore.
 
 ## Configuration
 

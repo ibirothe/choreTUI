@@ -295,7 +295,7 @@ mod tests {
                     row.get::<_, i64>(0)
                 })
                 .expect("migration count should load"),
-            1
+            LATEST_VERSION
         );
     }
 

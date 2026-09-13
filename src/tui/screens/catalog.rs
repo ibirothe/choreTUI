@@ -12,6 +12,7 @@ use ratatui::{
 };
 
 use crate::{
+    app::editor::CatalogPlanningChore,
     catalog::{
         ActivityCatalog, ActivityContext, ActivityTemplate, ActivityType, Area, CadenceKind,
         DurationBand, Effort,
@@ -106,10 +107,18 @@ impl CatalogFilters {
 }
 
 /// Action leaving the catalog browser or opening contextual help.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CatalogAction {
     Close,
     Help,
+    Select(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlanningStatus {
+    Planned,
+    PossibleDuplicate,
+    Unplanned,
 }
 
 /// Deterministic search, multi-facet, selection, and scroll state.
@@ -124,6 +133,9 @@ pub struct CatalogBrowserState {
     selected: usize,
     scroll: usize,
     preview_expanded: bool,
+    planned_template_ids: HashSet<String>,
+    possible_duplicate_ids: HashSet<String>,
+    status: Option<String>,
 }
 
 impl CatalogBrowserState {
@@ -139,7 +151,57 @@ impl CatalogBrowserState {
             selected: 0,
             scroll: 0,
             preview_expanded: false,
+            planned_template_ids: HashSet::new(),
+            possible_duplicate_ids: HashSet::new(),
+            status: None,
         }
+    }
+
+    /// Refresh exact provenance matches and conservative normalized-name matches.
+    pub fn set_planning(&mut self, chores: &[CatalogPlanningChore]) {
+        self.planned_template_ids = chores
+            .iter()
+            .filter_map(|chore| chore.provenance.as_ref())
+            .map(|provenance| provenance.template_id.clone())
+            .collect();
+        let names = chores
+            .iter()
+            .map(|chore| normalize_name(&chore.name))
+            .collect::<HashSet<_>>();
+        self.possible_duplicate_ids = self
+            .catalog
+            .activities()
+            .filter(|activity| {
+                !self.planned_template_ids.contains(&activity.id)
+                    && names.contains(&normalize_name(&activity.name))
+            })
+            .map(|activity| activity.id.clone())
+            .collect();
+    }
+
+    pub fn set_status(&mut self, status: Option<String>) {
+        self.status = status;
+    }
+
+    #[must_use]
+    pub fn planning_status(&self, template_id: &str) -> PlanningStatus {
+        if self.planned_template_ids.contains(template_id) {
+            PlanningStatus::Planned
+        } else if self.possible_duplicate_ids.contains(template_id) {
+            PlanningStatus::PossibleDuplicate
+        } else {
+            PlanningStatus::Unplanned
+        }
+    }
+
+    #[must_use]
+    pub fn template(&self, template_id: &str) -> Option<ActivityTemplate> {
+        self.catalog.find(template_id).cloned()
+    }
+
+    #[must_use]
+    pub fn provenance(&self) -> crate::catalog::CatalogProvenance<'_> {
+        self.catalog.provenance()
     }
 
     #[must_use]
@@ -233,8 +295,13 @@ impl CatalogBrowserState {
             KeyCode::PageDown => self.move_selection(10),
             KeyCode::Home => self.selected = 0,
             KeyCode::End => self.selected = self.matching_activities().len().saturating_sub(1),
-            KeyCode::Char('p') | KeyCode::Enter => {
+            KeyCode::Char('p') => {
                 self.preview_expanded = !self.preview_expanded;
+            }
+            KeyCode::Enter => {
+                return self
+                    .selected_activity()
+                    .map(|activity| CatalogAction::Select(activity.id.clone()));
             }
             _ => {}
         }
@@ -535,6 +602,14 @@ fn toggle_set<T: Copy + Eq + std::hash::Hash>(set: &mut HashSet<T>, value: T) {
     }
 }
 
+fn normalize_name(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 fn push_selected_labels<T: Copy + Eq + std::hash::Hash>(
     output: &mut Vec<String>,
     name: &str,
@@ -760,6 +835,7 @@ fn render_results(frame: &mut Frame<'_>, area: Rect, state: &mut CatalogBrowserS
                     activity,
                     position == state.selected,
                     usize::from(area.width.saturating_sub(2)),
+                    state.planning_status(&activity.id),
                 )
             })
             .collect()
@@ -772,7 +848,12 @@ fn render_results(frame: &mut Frame<'_>, area: Rect, state: &mut CatalogBrowserS
     );
 }
 
-fn result_line(activity: &ActivityTemplate, selected: bool, width: usize) -> Line<'static> {
+fn result_line(
+    activity: &ActivityTemplate,
+    selected: bool,
+    width: usize,
+    planning: PlanningStatus,
+) -> Line<'static> {
     let cursor = if selected { ">" } else { " " };
     let area = activity.areas.first().copied().map_or("—", area_label);
     let kind = activity
@@ -780,8 +861,13 @@ fn result_line(activity: &ActivityTemplate, selected: bool, width: usize) -> Lin
         .first()
         .copied()
         .map_or("—", activity_type_label);
+    let marker = match planning {
+        PlanningStatus::Planned => " [planned]",
+        PlanningStatus::PossibleDuplicate => " [possible duplicate]",
+        PlanningStatus::Unplanned => "",
+    };
     let text = format!(
-        "{cursor} {} · {area} · {kind} · {} · {}",
+        "{cursor} {}{marker} · {area} · {kind} · {} · {}",
         activity.name,
         effort_label(activity.effort),
         duration_label(activity.duration_band())
@@ -837,6 +923,14 @@ fn render_preview(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState
                     }
                 )),
                 Line::from(format!("Suggested cadence: {}", cadence_label(activity))),
+                Line::from(format!(
+                    "Planning: {}",
+                    match state.planning_status(&activity.id) {
+                        PlanningStatus::Planned => "Planned from this catalog template",
+                        PlanningStatus::PossibleDuplicate => "Possible duplicate by chore name",
+                        PlanningStatus::Unplanned => "Not planned",
+                    }
+                )),
                 Line::from(""),
                 Line::from(state.match_reason(activity)),
             ]
@@ -858,7 +952,7 @@ fn render_preview(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState
 fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState) {
     let hint = match state.input_mode {
         InputMode::Navigate => {
-            "j/k Move  / Search  f/Tab Filters  c Clear  p/Enter Preview  ? Help  Esc Back"
+            "j/k Move  Enter Use  p Preview  / Search  f/Tab Filters  c Clear  ? Help  Esc Back"
         }
         InputMode::Search => "Type to search  Backspace edit  Enter/Esc browse",
         InputMode::Filter => {
@@ -868,7 +962,9 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState)
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(hint),
-            Line::from("Suggestions do not change or create chores."),
+            Line::from(state.status.as_deref().unwrap_or(
+                "Enter copies the suggestion into an editable form; only Save writes it.",
+            )),
         ]),
         area,
     );
@@ -1021,6 +1117,60 @@ mod tests {
         assert_eq!(state.matching_activities().len(), 148);
         assert_eq!(state.active_filter_count(), 0);
         assert!(state.search().is_empty());
+    }
+
+    #[test]
+    fn planning_prefers_provenance_and_falls_back_to_normalized_name() {
+        let mut state = state();
+        let exact_id = "bathroom.scrub_shower";
+        let duplicate = state
+            .catalog
+            .activities()
+            .find(|activity| activity.id != exact_id)
+            .expect("another template should exist")
+            .clone();
+        state.set_planning(&[
+            CatalogPlanningChore {
+                name: "A renamed chore".to_owned(),
+                provenance: Some(crate::app::editor::TemplateProvenance {
+                    template_id: exact_id.to_owned(),
+                    schema_version: 1,
+                    catalog_version: 1,
+                    locale: "en".to_owned(),
+                }),
+            },
+            CatalogPlanningChore {
+                name: format!("  {}  ", duplicate.name.to_uppercase()),
+                provenance: None,
+            },
+        ]);
+
+        assert_eq!(state.planning_status(exact_id), PlanningStatus::Planned);
+        assert_eq!(
+            state.planning_status(&duplicate.id),
+            PlanningStatus::PossibleDuplicate
+        );
+    }
+
+    #[test]
+    fn enter_selects_without_mutating_browser_context() {
+        let mut state = state();
+        state.handle_key(key(KeyCode::Char('/')));
+        for character in "scrub".chars() {
+            state.handle_key(key(KeyCode::Char(character)));
+        }
+        state.handle_key(key(KeyCode::Enter));
+        let expected = state
+            .selected_activity()
+            .expect("search should select an activity")
+            .id
+            .clone();
+
+        assert_eq!(
+            state.handle_key(key(KeyCode::Enter)),
+            Some(CatalogAction::Select(expected))
+        );
+        assert_eq!(state.search(), "scrub");
     }
 
     #[test]

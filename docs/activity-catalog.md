@@ -118,8 +118,10 @@ constraints, not every true property.
 ## Browser filtering semantics
 
 Open Add Chore with `a`, then press `F2` to browse the catalog without changing
-the free-form editor. The browser starts with all active activities visible and
-does not create or modify chores.
+the free-form editor. The browser starts with all active activities visible.
+Pressing `Enter` copies the selected template's name, description, and supported
+cadence into a normal add form. Every copied value remains editable and no data
+is written until the user explicitly saves.
 
 Text search is incremental and case-insensitive across activity names and
 descriptions. Facet values use inclusive OR within one dimension and AND across
@@ -136,6 +138,13 @@ An unselected dimension does not restrict results. Cadence filtering excludes
 activities without a cadence suggestion; duration bands are derived from the
 active-time estimate. Result order remains the catalog's deterministic
 case-insensitive name order.
+
+Saved catalog chores retain the selected template ID and catalog version as
+separate provenance. This identifies exact planned templates without making
+catalog content authoritative over user edits. Active free-form chores with the
+same normalized name are marked as possible duplicates; the warning never
+blocks creating another chore. Saving or cancelling returns to the previous
+query, filters, selection, and scroll position.
 
 The result marker (`>`), filter checkboxes (`[x]`), active-filter summary,
 result count, scroll arrows, and textual match explanation communicate state

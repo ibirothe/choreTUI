@@ -3,7 +3,9 @@
 use std::error::Error;
 
 use crate::{
-    app::editor::{ChoreSubmission, EditorRecord, SchedulePattern},
+    app::editor::{
+        CatalogPlanningChore, ChoreSubmission, EditorRecord, SchedulePattern, TemplateProvenance,
+    },
     domain::{
         CalendarDate, Chore, ChoreId, ChoreName, Description, IsoWeek, Occurrence, OccurrenceId,
         Schedule, ScheduleId, ScheduleWindow, Timestamp, ValidationError, WeekError,
@@ -63,7 +65,18 @@ pub trait AtomicEditorStore {
         &mut self,
         chore: &Chore,
         schedule: &Schedule,
+        provenance: Option<&TemplateProvenance>,
     ) -> Result<(), Self::Error>;
+
+    /// Load catalog provenance for a chore, when it originated from a template.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when provenance cannot be loaded.
+    fn catalog_provenance(
+        &self,
+        chore_id: ChoreId,
+    ) -> Result<Option<TemplateProvenance>, Self::Error>;
 
     /// Persist metadata, lifecycle and optional schedule revision atomically.
     ///
@@ -298,6 +311,27 @@ where
         self.persistence.list(include_deleted)
     }
 
+    /// Return active chores with optional catalog identity for browser markers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when chores or their provenance cannot be loaded.
+    pub fn catalog_planning(
+        &self,
+    ) -> Result<Vec<CatalogPlanningChore>, <P as AtomicEditorStore>::Error> {
+        self.persistence
+            .list(false)?
+            .into_iter()
+            .filter(Chore::is_enabled)
+            .map(|chore| {
+                Ok(CatalogPlanningChore {
+                    name: chore.name().as_str().to_owned(),
+                    provenance: self.persistence.catalog_provenance(chore.id())?,
+                })
+            })
+            .collect()
+    }
+
     /// Load values for editing.
     ///
     /// # Errors
@@ -382,7 +416,7 @@ where
                 submission.enabled,
             )?;
             self.persistence
-                .create_editor_chore(&chore, &schedule)
+                .create_editor_chore(&chore, &schedule, submission.provenance.as_ref())
                 .map_err(EditorDataError::Persistence)?;
             Ok(chore_id)
         }
@@ -609,6 +643,7 @@ mod tests {
                     interval: RecurrenceInterval::new(2).expect("interval should be valid"),
                     weekdays: vec![IsoWeekday::Thursday],
                 },
+                provenance: None,
             })
             .expect("weekly chore should save");
         let daily = application
@@ -620,6 +655,7 @@ mod tests {
                 pattern: SchedulePattern::DailyInterval {
                     interval: RecurrenceInterval::new(3).expect("interval should be valid"),
                 },
+                provenance: None,
             })
             .expect("daily chore should save");
         let monthly = application
@@ -631,6 +667,7 @@ mod tests {
                 pattern: SchedulePattern::Monthly {
                     day: MonthlyDay::new(31).expect("monthly day should be valid"),
                 },
+                provenance: None,
             })
             .expect("monthly chore should save");
 
@@ -644,6 +681,7 @@ mod tests {
                 pattern: SchedulePattern::DailyInterval {
                     interval: RecurrenceInterval::new(1).expect("interval should be valid"),
                 },
+                provenance: None,
             })
             .expect("revision should save");
         let occurrences = application
@@ -673,6 +711,63 @@ mod tests {
                 [0]
             .kind(),
             RecurrenceKind::Monthly
+        );
+    }
+
+    #[test]
+    fn catalog_provenance_survives_user_edits_without_controlling_copied_fields() {
+        let today = date(2026, 9, 10);
+        let mut application = UseCases::new(
+            SqliteStore::open_in_memory().expect("database should open"),
+            FixedClock {
+                today,
+                now: timestamp(100),
+            },
+        );
+        let chore_id = application
+            .save_editor(ChoreSubmission {
+                id: None,
+                name: ChoreName::new("Scrub the shower").expect("name should be valid"),
+                description: None,
+                enabled: true,
+                pattern: SchedulePattern::Weekly {
+                    interval: RecurrenceInterval::new(2).expect("interval should be valid"),
+                    weekdays: vec![IsoWeekday::Thursday],
+                },
+                provenance: Some(TemplateProvenance {
+                    template_id: "bathroom.scrub_shower".to_owned(),
+                    schema_version: 1,
+                    catalog_version: 2,
+                    locale: "en".to_owned(),
+                }),
+            })
+            .expect("catalog chore should save");
+
+        application
+            .save_editor(ChoreSubmission {
+                id: Some(chore_id),
+                name: ChoreName::new("Scrub upstairs shower").expect("name should be valid"),
+                description: None,
+                enabled: true,
+                pattern: SchedulePattern::Weekly {
+                    interval: RecurrenceInterval::new(2).expect("interval should be valid"),
+                    weekdays: vec![IsoWeekday::Thursday],
+                },
+                provenance: None,
+            })
+            .expect("user edit should save");
+
+        let planning = application
+            .catalog_planning()
+            .expect("planning data should load");
+        assert_eq!(planning.len(), 1);
+        assert_eq!(planning[0].name, "Scrub upstairs shower");
+        assert_eq!(
+            planning[0]
+                .provenance
+                .as_ref()
+                .map(|value| (value.template_id.as_str(), value.catalog_version)),
+            Some(("bathroom.scrub_shower", 2))
         );
     }
 
