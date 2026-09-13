@@ -114,6 +114,7 @@ impl ActivityCatalog {
     }
 
     /// Return active and deprecated templates in deterministic name order.
+    #[must_use]
     pub fn all_templates(&self) -> impl ExactSizeIterator<Item = &ActivityTemplate> {
         self.document.activities.iter()
     }
