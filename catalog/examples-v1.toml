@@ -62,19 +62,19 @@ status = "active"
 kind = "seasonal"
 
 [[activities]]
-id = "personal_admin.organize_paperwork"
-name = "Organize household paperwork"
-description = "Sort new documents and file or discard them as appropriate."
-areas = ["personal_admin", "whole_home"]
-activity_types = ["organization", "administration"]
+id = "whole_home.inspect_visible_leaks"
+name = "Inspect for visible water leaks"
+description = "Check accessible plumbing and appliance connections for moisture."
+areas = ["whole_home", "bathroom", "kitchen", "laundry"]
+activity_types = ["inspection", "maintenance"]
 effort = "medium"
-estimated_minutes = 30
-contexts = ["indoors", "quiet"]
+estimated_minutes = 20
+contexts = ["indoors", "no_preparation"]
 status = "active"
 
 [activities.suggested_cadence]
-kind = "weeks"
-interval = 4
+kind = "months"
+interval = 1
 
 [[activities]]
 id = "bathroom.polish_fittings"

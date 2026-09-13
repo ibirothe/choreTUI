@@ -232,17 +232,13 @@ pub enum Area {
     Laundry,
     /// Garden, balcony, and other outdoor spaces.
     Outdoor,
-    /// Bicycle, car, and other personal transport.
-    Vehicle,
     /// Work affecting the entire home.
     WholeHome,
-    /// Personal paperwork and household administration.
-    PersonalAdmin,
 }
 
 impl Area {
     /// All area values in stable display order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 10] = [
         Self::Bathroom,
         Self::Kitchen,
         Self::Bedroom,
@@ -252,9 +248,7 @@ impl Area {
         Self::Storage,
         Self::Laundry,
         Self::Outdoor,
-        Self::Vehicle,
         Self::WholeHome,
-        Self::PersonalAdmin,
     ];
 }
 
@@ -278,13 +272,11 @@ pub enum ActivityType {
     Disposal,
     /// Caring for plants, animals, or household items.
     Care,
-    /// Paperwork and household administration.
-    Administration,
 }
 
 impl ActivityType {
     /// All activity-type values in stable display order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 8] = [
         Self::Cleaning,
         Self::Laundry,
         Self::Maintenance,
@@ -293,7 +285,6 @@ impl ActivityType {
         Self::Replenishment,
         Self::Disposal,
         Self::Care,
-        Self::Administration,
     ];
 }
 
@@ -738,8 +729,8 @@ mod tests {
         let catalog = ActivityCatalog::bundled().expect("bundled catalog should be valid");
         let activities = catalog.activities().collect::<Vec<_>>();
 
-        assert_eq!(activities.len(), 120);
-        assert_eq!(catalog.all_templates().len(), 120);
+        assert_eq!(activities.len(), 148);
+        assert_eq!(catalog.all_templates().len(), 148);
         assert!(activities.iter().all(|activity| {
             activity.status == TemplateStatus::Active
                 && activity.replaced_by.is_none()
@@ -799,7 +790,7 @@ mod tests {
         detached.name = "Changed copy".to_owned();
 
         assert_eq!(provenance.schema_version, SUPPORTED_SCHEMA_VERSION);
-        assert_eq!(provenance.catalog_version, 1);
+        assert_eq!(provenance.catalog_version, 2);
         assert_eq!(provenance.locale, "en");
         assert_eq!(
             catalog

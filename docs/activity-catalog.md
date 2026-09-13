@@ -72,12 +72,9 @@ without relying on textual conventions.
 - `storage`
 - `laundry`
 - `outdoor`
-- `vehicle`
 - `whole_home`
-- `personal_admin`
 
-Area means where the work applies, including conceptual areas such as household
-administration. Activities may span multiple areas.
+Area means where the work applies. Activities may span multiple areas.
 
 ### Activity type
 
@@ -89,7 +86,6 @@ administration. Activities may span multiple areas.
 - `replenishment`
 - `disposal`
 - `care`
-- `administration`
 
 Type describes the outcome of the work. Multiple types are appropriate when
 each independently helps discovery; they must not be added merely to increase
@@ -160,8 +156,8 @@ remains equivalent; region-specific activities receive their own IDs.
    square centimeter.
 3. **Avoid duplicates.** Alternate wording, products, or techniques belong in
    descriptions unless they represent meaningfully different work.
-4. **Do not assume ownership.** Activities for gardens, vehicles, pets, or
-   appliances are optional discoverable content, never baseline obligations.
+4. **Do not assume ownership.** Activities for gardens, pets, or appliances
+   are optional discoverable content, never baseline obligations.
 5. **Use neutral language.** Do not shame users, assign domestic roles, or
    present a spotless home as a measure of worth.
 6. **Prefer safe descriptions.** Do not prescribe chemical combinations,
