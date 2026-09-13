@@ -42,9 +42,7 @@ impl CatalogDocument {
     /// Returns the first schema or curation invariant that is violated.
     pub fn validate(&self) -> Result<(), CatalogError> {
         if self.schema_version != SUPPORTED_SCHEMA_VERSION {
-            return Err(CatalogError::UnsupportedSchemaVersion(
-                self.schema_version,
-            ));
+            return Err(CatalogError::UnsupportedSchemaVersion(self.schema_version));
         }
         if !valid_locale(&self.locale) {
             return Err(CatalogError::Locale(self.locale.clone()));
@@ -325,11 +323,7 @@ fn validate_activity(activity: &ActivityTemplate) -> Result<(), CatalogError> {
         return Err(missing_facet(activity, "activity types"));
     }
     ensure_unique(&activity.id, "areas", &activity.areas)?;
-    ensure_unique(
-        &activity.id,
-        "activity types",
-        &activity.activity_types,
-    )?;
+    ensure_unique(&activity.id, "activity types", &activity.activity_types)?;
     ensure_unique(&activity.id, "contexts", &activity.contexts)?;
     if !(1..=480).contains(&activity.estimated_minutes) {
         return Err(CatalogError::Duration {
@@ -400,9 +394,9 @@ where
 fn valid_cadence(cadence: &CadenceSuggestion) -> bool {
     match cadence.kind {
         CadenceKind::Seasonal => cadence.interval.is_none(),
-        CadenceKind::Days | CadenceKind::Weeks | CadenceKind::Months => {
-            cadence.interval.is_some_and(|interval| (1..=999).contains(&interval))
-        }
+        CadenceKind::Days | CadenceKind::Weeks | CadenceKind::Months => cadence
+            .interval
+            .is_some_and(|interval| (1..=999).contains(&interval)),
     }
 }
 
@@ -475,10 +469,7 @@ mod tests {
 
     #[test]
     fn typed_decoding_rejects_unknown_facets() {
-        let invalid = VALID.replace(
-            "areas = [\"bathroom\"]",
-            "areas = [\"spaceship\"]",
-        );
+        let invalid = VALID.replace("areas = [\"bathroom\"]", "areas = [\"spaceship\"]");
         assert!(matches!(
             CatalogDocument::parse(&invalid),
             Err(CatalogError::Parse(_))
