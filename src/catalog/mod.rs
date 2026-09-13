@@ -129,7 +129,7 @@ impl ActivityCatalog {
 
     /// Return version and locale information suitable for persisted provenance.
     #[must_use]
-    pub const fn provenance(&self) -> CatalogProvenance<'_> {
+    pub fn provenance(&self) -> CatalogProvenance<'_> {
         CatalogProvenance {
             schema_version: self.document.schema_version,
             catalog_version: self.document.catalog_version,
@@ -354,7 +354,7 @@ pub struct CadenceSuggestion {
 }
 
 /// Supported recommendation cadence families.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CadenceKind {
     /// Every N days.
