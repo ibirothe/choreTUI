@@ -91,8 +91,7 @@ impl CatalogFilters {
                     .iter()
                     .any(|kind| self.activity_types.contains(kind)))
             && (self.efforts.is_empty() || self.efforts.contains(&activity.effort))
-            && (self.durations.is_empty()
-                || self.durations.contains(&activity.duration_band()))
+            && (self.durations.is_empty() || self.durations.contains(&activity.duration_band()))
             && (self.contexts.is_empty()
                 || activity
                     .contexts
@@ -351,10 +350,9 @@ impl CatalogBrowserState {
         let selected_id = self.selected_activity().map(|activity| activity.id.clone());
         let metadata = ActivityCatalog::facet_metadata();
         match self.filter_focus {
-            FilterFocus::Area => toggle_set(
-                &mut self.filters.areas,
-                metadata.areas[self.facet_cursor],
-            ),
+            FilterFocus::Area => {
+                toggle_set(&mut self.filters.areas, metadata.areas[self.facet_cursor])
+            }
             FilterFocus::ActivityType => toggle_set(
                 &mut self.filters.activity_types,
                 metadata.activity_types[self.facet_cursor],
@@ -415,12 +413,7 @@ impl CatalogBrowserState {
             FilterFocus::Context => metadata
                 .contexts
                 .iter()
-                .map(|value| {
-                    (
-                        context_label(*value),
-                        self.filters.contexts.contains(value),
-                    )
-                })
+                .map(|value| (context_label(*value), self.filters.contexts.contains(value)))
                 .collect(),
             FilterFocus::Cadence => metadata
                 .cadence_kinds
@@ -509,7 +502,10 @@ impl CatalogBrowserState {
             reasons.push(format!("effort {}", effort_label(activity.effort)));
         }
         if self.filters.durations.contains(&activity.duration_band()) {
-            reasons.push(format!("duration {}", duration_label(activity.duration_band())));
+            reasons.push(format!(
+                "duration {}",
+                duration_label(activity.duration_band())
+            ));
         }
         push_match_reason(
             &mut reasons,
@@ -523,10 +519,7 @@ impl CatalogBrowserState {
             .as_ref()
             .filter(|cadence| self.filters.cadences.contains(&cadence.kind))
         {
-            reasons.push(format!(
-                "cadence {}",
-                cadence_kind_label(cadence.kind)
-            ));
+            reasons.push(format!("cadence {}", cadence_kind_label(cadence.kind)));
         }
         if reasons.is_empty() {
             "Browse result — no filters required".to_owned()
@@ -653,11 +646,16 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState)
         state.search.as_str()
     };
     let options = state.focused_options();
-    let current_option = options
-        .get(state.facet_cursor)
-        .map_or("—".to_owned(), |(label, selected)| {
-            format!("{}[{}] {label}", if state.is_filtering() { ">" } else { "" }, if *selected { 'x' } else { ' ' })
-        });
+    let current_option =
+        options
+            .get(state.facet_cursor)
+            .map_or("—".to_owned(), |(label, selected)| {
+                format!(
+                    "{}[{}] {label}",
+                    if state.is_filtering() { ">" } else { "" },
+                    if *selected { 'x' } else { ' ' }
+                )
+            });
     let lines = vec![
         Line::from(format!("[{mode}] Query: {search}")),
         Line::from(format!(
@@ -694,29 +692,24 @@ fn render_filter_editor(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowse
         Line::from("Tab facet · Space toggle"),
         Line::from(state.filter_summary()),
     ];
-    lines.extend(
-        options
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(rows)
-            .map(|(index, (label, selected))| {
-                let cursor = if state.is_filtering() && index == state.facet_cursor {
-                    '>'
+    lines.extend(options.iter().enumerate().skip(start).take(rows).map(
+        |(index, (label, selected))| {
+            let cursor = if state.is_filtering() && index == state.facet_cursor {
+                '>'
+            } else {
+                ' '
+            };
+            let mark = if *selected { 'x' } else { ' ' };
+            Line::styled(
+                format!("{cursor}[{mark}] {label}"),
+                if cursor == '>' {
+                    Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
                 } else {
-                    ' '
-                };
-                let mark = if *selected { 'x' } else { ' ' };
-                Line::styled(
-                    format!("{cursor}[{mark}] {label}"),
-                    if cursor == '>' {
-                        Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
-                    } else {
-                        Style::default()
-                    },
-                )
-            }),
-    );
+                    Style::default()
+                },
+            )
+        },
+    ));
     frame.render_widget(
         Paragraph::new(lines)
             .block(
@@ -814,9 +807,12 @@ fn render_preview(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState
                     activity.name.clone(),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Line::from(activity.description.clone().unwrap_or_else(|| {
-                    "No additional description.".to_owned()
-                })),
+                Line::from(
+                    activity
+                        .description
+                        .clone()
+                        .unwrap_or_else(|| "No additional description.".to_owned()),
+                ),
                 Line::from(""),
                 Line::from(format!(
                     "Area: {}",
@@ -840,10 +836,7 @@ fn render_preview(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState
                         join_labels(&activity.contexts, context_label)
                     }
                 )),
-                Line::from(format!(
-                    "Suggested cadence: {}",
-                    cadence_label(activity)
-                )),
+                Line::from(format!("Suggested cadence: {}", cadence_label(activity))),
                 Line::from(""),
                 Line::from(state.match_reason(activity)),
             ]
@@ -893,7 +886,11 @@ fn render_too_small(frame: &mut Frame<'_>, area: Rect) {
             Line::from("? Help  Esc Back"),
         ])
         .centered()
-        .block(Block::default().borders(Borders::ALL).title(" Activity Catalog ")),
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Activity Catalog "),
+        ),
         area,
     );
 }
@@ -1034,9 +1031,12 @@ mod tests {
             state.handle_key(key(KeyCode::Char(character)));
         }
         assert!(state.is_searching());
-        assert!(state.matching_activities().iter().any(|activity| {
-            activity.id == "laundry.clean_dryer_duct"
-        }));
+        assert!(
+            state
+                .matching_activities()
+                .iter()
+                .any(|activity| { activity.id == "laundry.clean_dryer_duct" })
+        );
         state.handle_key(key(KeyCode::Enter));
         assert!(!state.is_searching());
     }
@@ -1052,9 +1052,11 @@ mod tests {
         state.handle_key(key(KeyCode::Char(' '))); // Quick
 
         let results = state.matching_activities();
-        assert!(results.iter().any(|activity| {
-            activity.id == "bathroom.wipe_fixtures"
-        }));
+        assert!(
+            results
+                .iter()
+                .any(|activity| { activity.id == "bathroom.wipe_fixtures" })
+        );
         assert!(results.iter().all(|activity| {
             activity.areas.contains(&Area::Bathroom)
                 && activity.activity_types.contains(&ActivityType::Cleaning)
@@ -1064,9 +1066,12 @@ mod tests {
         state.handle_key(key(KeyCode::BackTab));
         state.handle_key(key(KeyCode::Right));
         state.handle_key(key(KeyCode::Char(' '))); // Laundry OR Cleaning
-        assert!(state.matching_activities().iter().any(|activity| {
-            activity.id == "bathroom.replace_towels"
-        }));
+        assert!(
+            state
+                .matching_activities()
+                .iter()
+                .any(|activity| { activity.id == "bathroom.replace_towels" })
+        );
     }
 
     #[test]
