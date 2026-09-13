@@ -128,10 +128,11 @@ fn help_lines(context: HelpContext) -> Vec<&'static str> {
             "h/l or Arrows     choose a facet value",
             "Space             toggle a facet value",
             "c                 clear search and all filters",
-            "p or Enter        expand/collapse compact preview",
+            "p                 expand/collapse compact preview",
+            "Enter             copy selection into editable Add Chore",
             "Esc               leave mode or return to Add Chore",
             "Filters use AND across dimensions and OR within one dimension.",
-            "Catalog suggestions never create or change chores.",
+            "Only Save creates a chore; duplicate warnings never block it.",
         ],
         HelpContext::ChoreList => vec![
             "Chore List:",

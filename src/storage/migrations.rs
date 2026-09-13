@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use super::sqlite::SqliteError;
 
 /// Latest schema version understood by this binary.
-pub const LATEST_VERSION: i64 = 1;
+pub const LATEST_VERSION: i64 = 2;
 
 #[derive(Clone, Copy)]
 struct Migration {
@@ -13,10 +13,16 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: include_str!("../../migrations/0001_initial.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: include_str!("../../migrations/0001_initial.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("../../migrations/0002_catalog_provenance.sql"),
+    },
+];
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<(), SqliteError> {
     migrate_with(connection, MIGRATIONS)

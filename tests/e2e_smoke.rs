@@ -60,6 +60,7 @@ fn primary_workflow_survives_restart_and_passes_doctor() {
                 interval: RecurrenceInterval::new(1).expect("interval should be valid"),
                 weekdays: vec![IsoWeekday::Monday],
             },
+            provenance: None,
         })
         .expect("chore should save");
     let mut board = BoardRuntime::new(application);

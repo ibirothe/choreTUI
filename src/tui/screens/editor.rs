@@ -12,8 +12,11 @@ use ratatui::{
 };
 
 use crate::{
-    app::editor::{ChoreSubmission, EditorRecord, SchedulePattern},
-    domain::{ChoreId, ChoreName, Description, IsoWeekday, MonthlyDay, RecurrenceInterval},
+    app::editor::{ChoreSubmission, EditorRecord, SchedulePattern, TemplateProvenance},
+    catalog::{ActivityTemplate, CadenceKind, CatalogProvenance},
+    domain::{
+        CalendarDate, ChoreId, ChoreName, Description, IsoWeekday, MonthlyDay, RecurrenceInterval,
+    },
 };
 
 const WEEKDAYS: [IsoWeekday; 7] = [
@@ -73,6 +76,8 @@ pub struct EditorState {
     errors: BTreeMap<EditorField, String>,
     save_error: Option<String>,
     confirming_cancel: bool,
+    provenance: Option<crate::app::editor::TemplateProvenance>,
+    notice: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,6 +140,82 @@ impl EditorState {
         )
     }
 
+    /// Copy a catalog suggestion into an ordinary, fully editable add form.
+    #[must_use]
+    pub fn from_template(
+        template: &ActivityTemplate,
+        catalog: CatalogProvenance<'_>,
+        selected_date: CalendarDate,
+        possible_duplicate: bool,
+    ) -> Self {
+        let weekday =
+            IsoWeekday::try_from(selected_date.as_date().weekday().number_days_from_monday() + 1)
+                .expect("calendar weekdays always map to ISO weekdays");
+        let mut notice = possible_duplicate.then(|| {
+            "Possible duplicate: an active chore has the same name. Saving another is allowed."
+                .to_owned()
+        });
+        let (recurrence, interval, weekdays, monthly_day) = match template
+            .suggested_cadence
+            .as_ref()
+            .map(|cadence| (cadence.kind, cadence.interval))
+        {
+            Some((CadenceKind::Days, Some(interval))) => (
+                RecurrenceChoice::Daily,
+                interval.to_string(),
+                BTreeSet::new(),
+                "1".to_owned(),
+            ),
+            Some((CadenceKind::Weeks, Some(interval))) => (
+                RecurrenceChoice::Weekly,
+                interval.to_string(),
+                BTreeSet::from([weekday]),
+                "1".to_owned(),
+            ),
+            Some((CadenceKind::Months, Some(1))) => (
+                RecurrenceChoice::Monthly,
+                "1".to_owned(),
+                BTreeSet::new(),
+                selected_date.as_date().day().to_string(),
+            ),
+            unsupported => {
+                if unsupported.is_some() {
+                    let cadence_notice = "The suggested cadence is not representable exactly; review recurrence before saving.";
+                    notice = Some(match notice {
+                        Some(existing) => format!("{existing} {cadence_notice}"),
+                        None => cadence_notice.to_owned(),
+                    });
+                }
+                (
+                    RecurrenceChoice::Weekly,
+                    "1".to_owned(),
+                    BTreeSet::from([weekday]),
+                    "1".to_owned(),
+                )
+            }
+        };
+        let mut state = Self::with_values(
+            EditorMode::Add,
+            Snapshot {
+                name: template.name.clone(),
+                description: template.description.clone().unwrap_or_default(),
+                recurrence,
+                interval,
+                weekdays,
+                monthly_day,
+                enabled: true,
+            },
+        );
+        state.provenance = Some(TemplateProvenance {
+            template_id: template.id.clone(),
+            schema_version: catalog.schema_version,
+            catalog_version: catalog.catalog_version,
+            locale: catalog.locale.to_owned(),
+        });
+        state.notice = notice;
+        state
+    }
+
     fn with_values(mode: EditorMode, values: Snapshot) -> Self {
         Self {
             mode,
@@ -145,6 +226,8 @@ impl EditorState {
             errors: BTreeMap::new(),
             save_error: None,
             confirming_cancel: false,
+            provenance: None,
+            notice: None,
         }
     }
 
@@ -155,7 +238,7 @@ impl EditorState {
 
     #[must_use]
     pub const fn can_browse_catalog(&self) -> bool {
-        matches!(self.mode, EditorMode::Add) && !self.confirming_cancel
+        matches!(self.mode, EditorMode::Add) && self.provenance.is_none() && !self.confirming_cancel
     }
 
     #[must_use]
@@ -181,6 +264,11 @@ impl EditorState {
     #[must_use]
     pub fn save_error(&self) -> Option<&str> {
         self.save_error.as_deref()
+    }
+
+    #[must_use]
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_deref()
     }
 
     pub fn set_save_error(&mut self, message: String) {
@@ -373,6 +461,7 @@ impl EditorState {
             description,
             enabled: self.values.enabled,
             pattern,
+            provenance: self.provenance.clone(),
         })
     }
 
@@ -468,7 +557,13 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &EditorState) {
             Style::default().fg(Color::Red),
         ));
     }
-    lines.push(Line::from(if matches!(state.mode, EditorMode::Add) {
+    if let Some(notice) = state.notice() {
+        lines.push(Line::styled(
+            notice.to_owned(),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    lines.push(Line::from(if state.can_browse_catalog() {
         "F2 catalog  Tab focus  Arrows choose  Space toggle  Ctrl+S save  Esc cancel"
     } else {
         "Tab focus  Arrows choose  Space toggle  Ctrl+S save  Esc cancel"
@@ -623,6 +718,31 @@ mod tests {
         assert_eq!(
             state.handle_key(key(KeyCode::Char('y'))),
             Some(EditorAction::Close)
+        );
+    }
+
+    #[test]
+    fn catalog_template_prefills_editable_fields_and_provenance() {
+        let catalog = crate::catalog::ActivityCatalog::bundled().expect("catalog should load");
+        let template = catalog
+            .find("bathroom.scrub_shower")
+            .expect("template should exist");
+        let mut state = EditorState::from_template(
+            template,
+            catalog.provenance(),
+            CalendarDate::new(2026, 9, 10).expect("date should be valid"),
+            false,
+        );
+        state.values.name.push_str(" upstairs");
+        state.focus = EditorField::Save;
+
+        let Some(EditorAction::Save(submission)) = state.handle_key(key(KeyCode::Enter)) else {
+            panic!("catalog form should validate")
+        };
+        assert_eq!(submission.name.as_str(), "Scrub the shower upstairs");
+        assert_eq!(
+            submission.provenance.map(|value| value.template_id),
+            Some("bathroom.scrub_shower".to_owned())
         );
     }
 }

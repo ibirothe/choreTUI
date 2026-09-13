@@ -25,7 +25,7 @@ use self::{
     screens::help::{HelpContext, HelpState},
 };
 use crate::{
-    app::editor::{ChoreSubmission, EditorRecord},
+    app::editor::{CatalogPlanningChore, ChoreSubmission, EditorRecord},
     domain::{CalendarDate, Chore, ChoreId, IsoWeek, Occurrence, OccurrenceId, OccurrenceState},
 };
 
@@ -65,6 +65,8 @@ pub trait BoardApplication {
     ///
     /// Returns an application error when persistence cannot be read.
     fn list_chores(&mut self) -> Result<Vec<Chore>, Self::Error>;
+    /// Load active chores and catalog identities for planned-activity markers.
+    fn catalog_planning(&mut self) -> Result<Vec<CatalogPlanningChore>, Self::Error>;
     /// Disable a chore effective today.
     ///
     /// # Errors
@@ -91,6 +93,7 @@ pub struct BoardRuntime<A> {
     state: BoardState,
     editor: Option<EditorState>,
     catalog_browser: Option<CatalogBrowserState>,
+    catalog_origin_editor: Option<EditorState>,
     chore_list: Option<ChoreListState>,
     help: Option<HelpState>,
     confirm_delete: bool,
@@ -126,6 +129,7 @@ impl<A: BoardApplication> BoardRuntime<A> {
             state,
             editor: None,
             catalog_browser: None,
+            catalog_origin_editor: None,
             chore_list: None,
             help: None,
             confirm_delete: config.confirm_delete,
@@ -178,12 +182,21 @@ impl<A: BoardApplication> BoardRuntime<A> {
             }
             return false;
         }
-        if let Some(catalog) = self.catalog_browser.as_mut() {
-            let action = catalog.handle_key(key);
+        if self.catalog_browser.is_some() && self.editor.is_none() {
+            let action = self
+                .catalog_browser
+                .as_mut()
+                .and_then(|catalog| catalog.handle_key(key));
             match action {
-                Some(CatalogAction::Close) => self.catalog_browser = None,
+                Some(CatalogAction::Close) => {
+                    self.catalog_browser = None;
+                    self.editor = self.catalog_origin_editor.take();
+                }
                 Some(CatalogAction::Help) => {
                     self.help = Some(HelpState::new(HelpContext::Catalog));
+                }
+                Some(CatalogAction::Select(template_id)) => {
+                    self.open_catalog_template(&template_id);
                 }
                 None => {}
             }
@@ -343,6 +356,9 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 match self.application.save_editor(submission) {
                     Ok(id) => {
                         self.editor = None;
+                        if self.catalog_browser.is_some() {
+                            self.catalog_origin_editor = None;
+                        }
                         match self.application.load_week(self.state.week()) {
                             Ok(occurrences) => {
                                 self.state.refresh_occurrences(occurrences, None);
@@ -357,6 +373,11 @@ impl<A: BoardApplication> BoardRuntime<A> {
                                 ));
                                 self.status_persistent = true;
                             }
+                        }
+                        if self.catalog_browser.is_some() {
+                            self.refresh_catalog_planning(Some(
+                                "Chore saved; the activity is now marked planned.".to_owned(),
+                            ));
                         }
                     }
                     Err(error) => {
@@ -375,8 +396,26 @@ impl<A: BoardApplication> BoardRuntime<A> {
     }
 
     fn open_catalog(&mut self) {
+        let planning = match self.application.catalog_planning() {
+            Ok(planning) => planning,
+            Err(error) => {
+                tracing::error!(%error, "could not load catalog planning state");
+                if let Some(editor) = self.editor.as_mut() {
+                    editor.set_save_error(
+                        "Could not load activity planning state; free-form creation remains available."
+                            .to_owned(),
+                    );
+                }
+                return;
+            }
+        };
         match crate::catalog::ActivityCatalog::bundled() {
-            Ok(catalog) => self.catalog_browser = Some(CatalogBrowserState::new(catalog)),
+            Ok(catalog) => {
+                let mut browser = CatalogBrowserState::new(catalog);
+                browser.set_planning(&planning);
+                self.catalog_origin_editor = self.editor.take();
+                self.catalog_browser = Some(browser);
+            }
             Err(error) => {
                 tracing::error!(%error, "could not load bundled activity catalog");
                 if let Some(editor) = self.editor.as_mut() {
@@ -384,6 +423,46 @@ impl<A: BoardApplication> BoardRuntime<A> {
                         "Could not load activity catalog; free-form creation remains available."
                             .to_owned(),
                     );
+                }
+            }
+        }
+    }
+
+    fn open_catalog_template(&mut self, template_id: &str) {
+        let selected_date = self.state.day_date(self.state.selected_day());
+        let Some(browser) = self.catalog_browser.as_ref() else {
+            return;
+        };
+        let Some(template) = browser.template(template_id) else {
+            return;
+        };
+        let provenance = browser.provenance();
+        let possible_duplicate = matches!(
+            browser.planning_status(template_id),
+            screens::catalog::PlanningStatus::PossibleDuplicate
+        );
+        self.editor = Some(EditorState::from_template(
+            &template,
+            provenance,
+            selected_date,
+            possible_duplicate,
+        ));
+    }
+
+    fn refresh_catalog_planning(&mut self, success: Option<String>) {
+        match self.application.catalog_planning() {
+            Ok(planning) => {
+                if let Some(browser) = self.catalog_browser.as_mut() {
+                    browser.set_planning(&planning);
+                    browser.set_status(success);
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, "could not refresh catalog planning state");
+                if let Some(browser) = self.catalog_browser.as_mut() {
+                    browser.set_status(Some(
+                        "Saved, but planned markers could not be refreshed.".to_owned(),
+                    ));
                 }
             }
         }
@@ -574,6 +653,12 @@ pub fn run<A: BoardApplication>(application: A, config: crate::config::Config) -
         terminal.draw(|frame| {
             if let Some(help) = runtime.help() {
                 screens::help::render(frame, frame.area(), help);
+            } else if runtime.catalog_browser().is_some() && runtime.editor().is_some() {
+                screens::editor::render(
+                    frame,
+                    frame.area(),
+                    runtime.editor().expect("editor checked above"),
+                );
             } else if let Some(catalog) = runtime.catalog_browser_mut() {
                 screens::catalog::render(frame, frame.area(), catalog);
             } else if let Some(editor) = runtime.editor() {
@@ -612,7 +697,7 @@ mod tests {
 
     use super::{BoardApplication, BoardRuntime, TerminalControl, TerminalGuard};
     use crate::{
-        app::editor::{ChoreSubmission, EditorRecord},
+        app::editor::{CatalogPlanningChore, ChoreSubmission, EditorRecord},
         domain::{
             CalendarDate, Chore, ChoreId, ChoreName, IsoWeek, Occurrence, OccurrenceId,
             OccurrenceSeed, OccurrenceState, ScheduleId, Timestamp,
@@ -684,6 +769,10 @@ mod tests {
         }
 
         fn list_chores(&mut self) -> Result<Vec<Chore>, Self::Error> {
+            Ok(Vec::new())
+        }
+
+        fn catalog_planning(&mut self) -> Result<Vec<CatalogPlanningChore>, Self::Error> {
             Ok(Vec::new())
         }
 
@@ -814,13 +903,21 @@ mod tests {
         assert!(runtime.catalog_browser().is_none());
 
         runtime.handle_key(KeyEvent::from(KeyCode::F(2)), BoardLayout::SevenColumns);
-        assert!(runtime.editor().is_some());
+        assert!(runtime.editor().is_none());
         assert_eq!(
             runtime
                 .catalog_browser()
                 .map(|catalog| catalog.matching_activities().len()),
             Some(148)
         );
+
+        runtime.handle_key(KeyEvent::from(KeyCode::Enter), BoardLayout::SevenColumns);
+        assert!(runtime.editor().is_some());
+        assert!(runtime.catalog_browser().is_some());
+
+        runtime.handle_key(KeyEvent::from(KeyCode::Esc), BoardLayout::SevenColumns);
+        assert!(runtime.editor().is_none());
+        assert!(runtime.catalog_browser().is_some());
 
         runtime.handle_key(KeyEvent::from(KeyCode::Esc), BoardLayout::SevenColumns);
         assert!(runtime.catalog_browser().is_none());

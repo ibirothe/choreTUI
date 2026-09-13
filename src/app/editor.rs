@@ -47,6 +47,22 @@ pub struct EditorRecord {
     pub pattern: SchedulePattern,
 }
 
+/// Immutable link to the catalog template a user copied into a chore.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TemplateProvenance {
+    pub template_id: String,
+    pub schema_version: u16,
+    pub catalog_version: u32,
+    pub locale: String,
+}
+
+/// Minimal active-chore data used to identify planned catalog activities.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogPlanningChore {
+    pub name: String,
+    pub provenance: Option<TemplateProvenance>,
+}
+
 /// Fully validated add/edit request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChoreSubmission {
@@ -55,4 +71,5 @@ pub struct ChoreSubmission {
     pub description: Option<Description>,
     pub enabled: bool,
     pub pattern: SchedulePattern,
+    pub provenance: Option<TemplateProvenance>,
 }
