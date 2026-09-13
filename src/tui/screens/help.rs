@@ -14,6 +14,7 @@ use ratatui::{
 pub enum HelpContext {
     Board,
     Editor,
+    Catalog,
     ChoreList,
 }
 
@@ -107,6 +108,7 @@ fn help_lines(context: HelpContext) -> Vec<&'static str> {
         ],
         HelpContext::Editor => vec![
             "Chore Editor:",
+            "F2                browse the activity catalog while adding",
             "Tab/BackTab       move field focus",
             "Arrows            change choices and values",
             "Space             toggle weekday or enabled state",
@@ -114,6 +116,22 @@ fn help_lines(context: HelpContext) -> Vec<&'static str> {
             "Ctrl+S            validate and save atomically",
             "Esc               cancel; dirty forms ask first",
             "Recurrence edits are effective today.",
+        ],
+        HelpContext::Catalog => vec![
+            "Activity Catalog:",
+            "k/Up, j/Down      move through matching activities",
+            "Home/End          first/last result",
+            "PageUp/PageDown   move ten results",
+            "/                 edit incremental text search",
+            "f or Tab          focus facet filters",
+            "Tab/BackTab       next/previous facet dimension",
+            "h/l or Arrows     choose a facet value",
+            "Space             toggle a facet value",
+            "c                 clear search and all filters",
+            "p or Enter        expand/collapse compact preview",
+            "Esc               leave mode or return to Add Chore",
+            "Filters use AND across dimensions and OR within one dimension.",
+            "Catalog suggestions never create or change chores.",
         ],
         HelpContext::ChoreList => vec![
             "Chore List:",

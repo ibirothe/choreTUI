@@ -41,6 +41,12 @@ The Weekly Board is the startup screen. Press `?` for contextual, scrollable hel
 
 The editor uses `Tab`/`BackTab` for focus, arrows for choices, `Space` for checkboxes, `Ctrl+S` to save, and `Esc` to cancel. The Chore List uses `/` to filter, `Space` to enable or disable, `D` to soft-delete, and `x` to include deleted chores.
 
+While adding a chore, press `F2` to browse the bundled activity catalog. Use
+`/` for incremental text search, `f` or `Tab` for facet filters, `Space` to
+toggle a filter value, `c` to clear all criteria, and `p` or `Enter` for the
+preview. Filters use OR within a dimension and AND across dimensions. Browsing
+and cancelling never create or change chores.
+
 ## Configuration
 
 The optional `config.toml` supports:

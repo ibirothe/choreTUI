@@ -19,6 +19,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use self::{
     model::{BoardCommand, BoardLayout, BoardState, input_for_key},
+    screens::catalog::{CatalogAction, CatalogBrowserState},
     screens::chore_list::{ChoreListAction, ChoreListState},
     screens::editor::{EditorAction, EditorState},
     screens::help::{HelpContext, HelpState},
@@ -89,6 +90,7 @@ pub struct BoardRuntime<A> {
     application: A,
     state: BoardState,
     editor: Option<EditorState>,
+    catalog_browser: Option<CatalogBrowserState>,
     chore_list: Option<ChoreListState>,
     help: Option<HelpState>,
     confirm_delete: bool,
@@ -123,6 +125,7 @@ impl<A: BoardApplication> BoardRuntime<A> {
             application,
             state,
             editor: None,
+            catalog_browser: None,
             chore_list: None,
             help: None,
             confirm_delete: config.confirm_delete,
@@ -142,6 +145,15 @@ impl<A: BoardApplication> BoardRuntime<A> {
     #[must_use]
     pub const fn editor(&self) -> Option<&EditorState> {
         self.editor.as_ref()
+    }
+
+    #[must_use]
+    pub const fn catalog_browser(&self) -> Option<&CatalogBrowserState> {
+        self.catalog_browser.as_ref()
+    }
+
+    pub fn catalog_browser_mut(&mut self) -> Option<&mut CatalogBrowserState> {
+        self.catalog_browser.as_mut()
     }
 
     #[must_use]
@@ -166,6 +178,17 @@ impl<A: BoardApplication> BoardRuntime<A> {
             }
             return false;
         }
+        if let Some(catalog) = self.catalog_browser.as_mut() {
+            let action = catalog.handle_key(key);
+            match action {
+                Some(CatalogAction::Close) => self.catalog_browser = None,
+                Some(CatalogAction::Help) => {
+                    self.help = Some(HelpState::new(HelpContext::Catalog));
+                }
+                None => {}
+            }
+            return false;
+        }
         if key.code == KeyCode::Char('?')
             && self
                 .editor
@@ -176,6 +199,10 @@ impl<A: BoardApplication> BoardRuntime<A> {
             return false;
         }
         if let Some(editor) = self.editor.as_mut() {
+            if key.code == KeyCode::F(2) && editor.can_browse_catalog() {
+                self.open_catalog();
+                return false;
+            }
             let action = editor.handle_key(key);
             self.handle_editor_action(action);
             return false;
@@ -344,6 +371,21 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 }
             }
             None => {}
+        }
+    }
+
+    fn open_catalog(&mut self) {
+        match crate::catalog::ActivityCatalog::bundled() {
+            Ok(catalog) => self.catalog_browser = Some(CatalogBrowserState::new(catalog)),
+            Err(error) => {
+                tracing::error!(%error, "could not load bundled activity catalog");
+                if let Some(editor) = self.editor.as_mut() {
+                    editor.set_save_error(
+                        "Could not load activity catalog; free-form creation remains available."
+                            .to_owned(),
+                    );
+                }
+            }
         }
     }
 
@@ -532,6 +574,8 @@ pub fn run<A: BoardApplication>(application: A, config: crate::config::Config) -
         terminal.draw(|frame| {
             if let Some(help) = runtime.help() {
                 screens::help::render(frame, frame.area(), help);
+            } else if let Some(catalog) = runtime.catalog_browser_mut() {
+                screens::catalog::render(frame, frame.area(), catalog);
             } else if let Some(editor) = runtime.editor() {
                 screens::editor::render(frame, frame.area(), editor);
             } else if let Some(chore_list) = runtime.chore_list_mut() {
@@ -563,6 +607,8 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
+
+    use crossterm::event::{KeyCode, KeyEvent};
 
     use super::{BoardApplication, BoardRuntime, TerminalControl, TerminalGuard};
     use crate::{
@@ -750,6 +796,35 @@ mod tests {
         assert_eq!(runtime.state().status(), Some("Chore marked complete."));
         runtime.handle_input(BoardInput::NextOccurrence, BoardLayout::SevenColumns);
         assert_eq!(runtime.state().status(), None);
+    }
+
+    #[test]
+    fn add_editor_opens_catalog_and_escape_returns_without_persistence() {
+        let monday = date(2026, 9, 7);
+        let application = FakeApplication {
+            today: monday,
+            occurrences: Vec::new(),
+            fail_toggle: false,
+            fail_load: false,
+        };
+        let mut runtime = BoardRuntime::new(application);
+
+        runtime.handle_input(BoardInput::AddChore, BoardLayout::SevenColumns);
+        assert!(runtime.editor().is_some());
+        assert!(runtime.catalog_browser().is_none());
+
+        runtime.handle_key(KeyEvent::from(KeyCode::F(2)), BoardLayout::SevenColumns);
+        assert!(runtime.editor().is_some());
+        assert_eq!(
+            runtime
+                .catalog_browser()
+                .map(|catalog| catalog.matching_activities().len()),
+            Some(148)
+        );
+
+        runtime.handle_key(KeyEvent::from(KeyCode::Esc), BoardLayout::SevenColumns);
+        assert!(runtime.catalog_browser().is_none());
+        assert!(runtime.editor().is_some());
     }
 
     #[test]
