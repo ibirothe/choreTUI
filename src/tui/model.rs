@@ -50,6 +50,7 @@ pub enum BoardInput {
     DisableChore,
     DeleteChore,
     OpenChoreList,
+    OpenGuidedPlanning,
     PreviousWeek,
     NextWeek,
     CurrentWeek,
@@ -66,6 +67,7 @@ pub enum BoardCommand {
     DisableChore(ChoreId),
     DeleteChore(ChoreId),
     OpenChoreList,
+    OpenGuidedPlanning,
     LoadWeek(IsoWeek),
     Help,
     Quit,
@@ -88,6 +90,7 @@ pub const fn input_for_key(key: KeyEvent) -> Option<BoardInput> {
         KeyCode::Char('d') => Some(BoardInput::DisableChore),
         KeyCode::Char('D') => Some(BoardInput::DeleteChore),
         KeyCode::Char('c') => Some(BoardInput::OpenChoreList),
+        KeyCode::Char('g') => Some(BoardInput::OpenGuidedPlanning),
         KeyCode::Char('[') | KeyCode::PageUp => Some(BoardInput::PreviousWeek),
         KeyCode::Char(']') | KeyCode::PageDown => Some(BoardInput::NextWeek),
         KeyCode::Char('t') => Some(BoardInput::CurrentWeek),
@@ -283,6 +286,9 @@ impl BoardState {
                     .map(|item| BoardCommand::DeleteChore(item.chore_id())));
             }
             BoardInput::OpenChoreList => return Ok(Some(BoardCommand::OpenChoreList)),
+            BoardInput::OpenGuidedPlanning => {
+                return Ok(Some(BoardCommand::OpenGuidedPlanning));
+            }
             BoardInput::PreviousWeek => {
                 return self.week.previous().map(BoardCommand::LoadWeek).map(Some);
             }
@@ -449,6 +455,11 @@ mod tests {
             assert_eq!(input_for_key(key(KeyCode::Char(vim))), Some(expected));
             assert_eq!(input_for_key(key(conventional)), Some(expected));
         }
+
+        assert_eq!(
+            input_for_key(key(KeyCode::Char('g'))),
+            Some(BoardInput::OpenGuidedPlanning)
+        );
     }
 
     #[test]

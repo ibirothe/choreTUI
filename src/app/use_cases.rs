@@ -1,6 +1,6 @@
 //! Application-level orchestration for transactional persistence operations.
 
-use std::error::Error;
+use std::{collections::HashSet, error::Error};
 
 use crate::{
     app::editor::{
@@ -77,6 +77,31 @@ pub trait AtomicEditorStore {
         &self,
         chore_id: ChoreId,
     ) -> Result<Option<TemplateProvenance>, Self::Error>;
+
+    /// Load locally dismissed catalog template identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when dismissals cannot be loaded.
+    fn catalog_dismissals(&self) -> Result<HashSet<String>, Self::Error>;
+
+    /// Persist one catalog-template dismissal.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when the dismissal cannot be saved.
+    fn dismiss_catalog_template(
+        &mut self,
+        template_id: &str,
+        dismissed_at: Timestamp,
+    ) -> Result<(), Self::Error>;
+
+    /// Remove every catalog-template dismissal and return the affected count.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when dismissals cannot be reset.
+    fn reset_catalog_dismissals(&mut self) -> Result<usize, Self::Error>;
 
     /// Persist metadata, lifecycle and optional schedule revision atomically.
     ///
@@ -330,6 +355,37 @@ where
                 })
             })
             .collect()
+    }
+
+    /// Return locally dismissed catalog template identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when dismissals cannot be loaded.
+    pub fn catalog_dismissals(&self) -> Result<HashSet<String>, <P as AtomicEditorStore>::Error> {
+        self.persistence.catalog_dismissals()
+    }
+
+    /// Dismiss one catalog suggestion without changing any chore.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when the dismissal cannot be saved.
+    pub fn dismiss_catalog_template(
+        &mut self,
+        template_id: &str,
+    ) -> Result<(), <P as AtomicEditorStore>::Error> {
+        self.persistence
+            .dismiss_catalog_template(template_id, self.clock.now())
+    }
+
+    /// Reset all local catalog dismissals.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when dismissals cannot be reset.
+    pub fn reset_catalog_dismissals(&mut self) -> Result<usize, <P as AtomicEditorStore>::Error> {
+        self.persistence.reset_catalog_dismissals()
     }
 
     /// Load values for editing.
@@ -768,6 +824,64 @@ mod tests {
                 .as_ref()
                 .map(|value| (value.template_id.as_str(), value.catalog_version)),
             Some(("bathroom.scrub_shower", 2))
+        );
+    }
+
+    #[test]
+    fn catalog_dismissals_are_idempotent_and_resettable_without_chores() {
+        let temporary = tempdir_in(env::current_dir().expect("working directory should exist"))
+            .expect("temporary directory should be created");
+        let database = temporary.path().join("catalog-dismissals.db");
+        let mut application = UseCases::new(
+            SqliteStore::open(&database).expect("database should open"),
+            FixedClock {
+                today: date(2026, 9, 10),
+                now: timestamp(100),
+            },
+        );
+
+        application
+            .dismiss_catalog_template("bathroom.clean_basin")
+            .expect("dismissal should save");
+        application
+            .dismiss_catalog_template("bathroom.clean_basin")
+            .expect("repeat dismissal should remain valid");
+        assert_eq!(
+            application
+                .catalog_dismissals()
+                .expect("dismissals should load"),
+            HashSet::from(["bathroom.clean_basin".to_owned()])
+        );
+        assert!(
+            application
+                .catalog_planning()
+                .expect("chores should load")
+                .is_empty()
+        );
+
+        let (store, clock) = application.into_parts();
+        drop(store);
+        let mut application = UseCases::new(
+            SqliteStore::open(&database).expect("database should reopen"),
+            clock,
+        );
+        assert_eq!(
+            application
+                .catalog_dismissals()
+                .expect("dismissals should survive restart"),
+            HashSet::from(["bathroom.clean_basin".to_owned()])
+        );
+        assert_eq!(
+            application
+                .reset_catalog_dismissals()
+                .expect("dismissals should reset"),
+            1
+        );
+        assert!(
+            application
+                .catalog_dismissals()
+                .expect("dismissals should load")
+                .is_empty()
         );
     }
 

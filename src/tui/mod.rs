@@ -5,6 +5,7 @@ pub mod screens;
 pub mod widgets;
 
 use std::{
+    collections::HashSet,
     fmt::Display,
     io::{self, stdout},
 };
@@ -71,6 +72,24 @@ pub trait BoardApplication {
     ///
     /// Returns an application error when chores or provenance cannot be loaded.
     fn catalog_planning(&mut self) -> Result<Vec<CatalogPlanningChore>, Self::Error>;
+    /// Load locally dismissed catalog template identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when dismissals cannot be loaded.
+    fn catalog_dismissals(&mut self) -> Result<HashSet<String>, Self::Error>;
+    /// Dismiss one catalog suggestion without changing any chore.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when the dismissal cannot be saved.
+    fn dismiss_catalog_template(&mut self, template_id: &str) -> Result<(), Self::Error>;
+    /// Reset all local catalog dismissals.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when dismissals cannot be reset.
+    fn reset_catalog_dismissals(&mut self) -> Result<usize, Self::Error>;
     /// Disable a chore effective today.
     ///
     /// # Errors
@@ -202,6 +221,10 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 Some(CatalogAction::Select(template_id)) => {
                     self.open_catalog_template(&template_id);
                 }
+                Some(CatalogAction::Dismiss(template_id)) => {
+                    self.dismiss_catalog_template(&template_id);
+                }
+                Some(CatalogAction::ResetDismissals) => self.reset_catalog_dismissals(),
                 None => {}
             }
             return false;
@@ -289,6 +312,10 @@ impl<A: BoardApplication> BoardRuntime<A> {
             }
             Some(BoardCommand::OpenChoreList) => {
                 self.open_chore_list(None);
+                false
+            }
+            Some(BoardCommand::OpenGuidedPlanning) => {
+                self.open_guided_catalog();
                 false
             }
             Some(BoardCommand::Help) => {
@@ -427,6 +454,90 @@ impl<A: BoardApplication> BoardRuntime<A> {
                         "Could not load activity catalog; free-form creation remains available."
                             .to_owned(),
                     );
+                }
+            }
+        }
+    }
+
+    fn open_guided_catalog(&mut self) {
+        let planning = match self.application.catalog_planning() {
+            Ok(planning) => planning,
+            Err(error) => {
+                tracing::error!(%error, "could not load guided planning state");
+                self.state.set_status(Some(
+                    "Error: Could not load guided planning; retry or run `chore doctor`."
+                        .to_owned(),
+                ));
+                self.status_persistent = true;
+                return;
+            }
+        };
+        let dismissals = match self.application.catalog_dismissals() {
+            Ok(dismissals) => dismissals,
+            Err(error) => {
+                tracing::error!(%error, "could not load catalog dismissals");
+                self.state.set_status(Some(
+                    "Error: Could not load guided planning; retry or run `chore doctor`."
+                        .to_owned(),
+                ));
+                self.status_persistent = true;
+                return;
+            }
+        };
+        match crate::catalog::ActivityCatalog::bundled() {
+            Ok(catalog) => {
+                let mut browser = CatalogBrowserState::guided(catalog);
+                browser.set_planning(&planning);
+                browser.set_dismissals(dismissals);
+                self.catalog_origin_editor = None;
+                self.catalog_browser = Some(browser);
+            }
+            Err(error) => {
+                tracing::error!(%error, "could not load bundled activity catalog");
+                self.state.set_status(Some(
+                    "Error: Could not load activity catalog; free-form creation remains available."
+                        .to_owned(),
+                ));
+                self.status_persistent = true;
+            }
+        }
+    }
+
+    fn dismiss_catalog_template(&mut self, template_id: &str) {
+        match self.application.dismiss_catalog_template(template_id) {
+            Ok(()) => {
+                if let Some(browser) = self.catalog_browser.as_mut() {
+                    browser.mark_dismissed(template_id.to_owned());
+                    browser.set_status(Some(
+                        "Suggestion dismissed; scheduled chores were not changed.".to_owned(),
+                    ));
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, %template_id, "could not dismiss catalog template");
+                if let Some(browser) = self.catalog_browser.as_mut() {
+                    browser.set_status(Some(
+                        "Could not dismiss suggestion; nothing changed.".to_owned(),
+                    ));
+                }
+            }
+        }
+    }
+
+    fn reset_catalog_dismissals(&mut self) {
+        match self.application.reset_catalog_dismissals() {
+            Ok(count) => {
+                if let Some(browser) = self.catalog_browser.as_mut() {
+                    browser.clear_dismissals();
+                    browser.set_status(Some(format!("Reset {count} dismissed suggestions.")));
+                }
+            }
+            Err(error) => {
+                tracing::error!(%error, "could not reset catalog dismissals");
+                if let Some(browser) = self.catalog_browser.as_mut() {
+                    browser.set_status(Some(
+                        "Could not reset dismissed suggestions; nothing changed.".to_owned(),
+                    ));
                 }
             }
         }
@@ -683,6 +794,7 @@ pub fn run<A: BoardApplication>(application: A, config: crate::config::Config) -
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashSet,
         fmt, io,
         panic::{AssertUnwindSafe, catch_unwind},
         sync::{
@@ -722,6 +834,7 @@ mod tests {
         occurrences: Vec<Occurrence>,
         fail_toggle: bool,
         fail_load: bool,
+        dismissals: HashSet<String>,
     }
 
     impl BoardApplication for FakeApplication {
@@ -772,6 +885,21 @@ mod tests {
 
         fn catalog_planning(&mut self) -> Result<Vec<CatalogPlanningChore>, Self::Error> {
             Ok(Vec::new())
+        }
+
+        fn catalog_dismissals(&mut self) -> Result<HashSet<String>, Self::Error> {
+            Ok(self.dismissals.clone())
+        }
+
+        fn dismiss_catalog_template(&mut self, template_id: &str) -> Result<(), Self::Error> {
+            self.dismissals.insert(template_id.to_owned());
+            Ok(())
+        }
+
+        fn reset_catalog_dismissals(&mut self) -> Result<usize, Self::Error> {
+            let count = self.dismissals.len();
+            self.dismissals.clear();
+            Ok(count)
         }
 
         fn disable_chore(&mut self, _id: ChoreId) -> Result<(), Self::Error> {
@@ -865,6 +993,7 @@ mod tests {
             occurrences: vec![item],
             fail_toggle: false,
             fail_load: false,
+            dismissals: HashSet::new(),
         };
         let mut runtime = BoardRuntime::new(application);
 
@@ -893,6 +1022,7 @@ mod tests {
             occurrences: Vec::new(),
             fail_toggle: false,
             fail_load: false,
+            dismissals: HashSet::new(),
         };
         let mut runtime = BoardRuntime::new(application);
 
@@ -923,6 +1053,54 @@ mod tests {
     }
 
     #[test]
+    fn guided_planning_dismisses_resets_and_routes_selection_to_editor() {
+        let monday = date(2026, 9, 7);
+        let application = FakeApplication {
+            today: monday,
+            occurrences: Vec::new(),
+            fail_toggle: false,
+            fail_load: false,
+            dismissals: HashSet::new(),
+        };
+        let mut runtime = BoardRuntime::new(application);
+
+        runtime.handle_input(BoardInput::OpenGuidedPlanning, BoardLayout::SevenColumns);
+        let initial = runtime
+            .catalog_browser()
+            .map(|catalog| catalog.matching_activities().len())
+            .expect("guided catalog should open");
+        assert_eq!(initial, 148);
+
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char('x')),
+            BoardLayout::SevenColumns,
+        );
+        assert_eq!(
+            runtime
+                .catalog_browser()
+                .map(|catalog| catalog.matching_activities().len()),
+            Some(initial - 1)
+        );
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char('R')),
+            BoardLayout::SevenColumns,
+        );
+        assert_eq!(
+            runtime
+                .catalog_browser()
+                .map(|catalog| catalog.matching_activities().len()),
+            Some(initial)
+        );
+
+        runtime.handle_key(KeyEvent::from(KeyCode::Enter), BoardLayout::SevenColumns);
+        assert!(runtime.editor().is_some());
+        assert!(runtime.catalog_browser().is_some());
+        runtime.handle_key(KeyEvent::from(KeyCode::Esc), BoardLayout::SevenColumns);
+        assert!(runtime.editor().is_none());
+        assert!(runtime.catalog_browser().is_some());
+    }
+
+    #[test]
     fn failed_toggle_keeps_persisted_view_and_error_visible_during_navigation() {
         let monday = date(2026, 9, 7);
         let application = FakeApplication {
@@ -930,6 +1108,7 @@ mod tests {
             occurrences: vec![occurrence(monday)],
             fail_toggle: true,
             fail_load: false,
+            dismissals: HashSet::new(),
         };
         let mut runtime = BoardRuntime::new(application);
 
@@ -957,6 +1136,7 @@ mod tests {
             occurrences: vec![occurrence(monday)],
             fail_toggle: false,
             fail_load: false,
+            dismissals: HashSet::new(),
         };
         let mut runtime = BoardRuntime::new(application);
         let old_week = runtime.state().week();
