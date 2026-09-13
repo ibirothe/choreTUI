@@ -457,7 +457,7 @@ impl AtomicEditorStore for SqliteStore {
                     i64::from(provenance.schema_version),
                     i64::from(provenance.catalog_version),
                     provenance.locale.as_str(),
-                    format_timestamp(chore.timestamps().created_at())?,
+                    format_timestamp(chore.timestamps().created_at)?,
                 ],
             )?;
         }
