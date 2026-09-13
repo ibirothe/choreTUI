@@ -3,7 +3,7 @@
 pub mod editor;
 pub mod use_cases;
 
-use std::io;
+use std::{collections::HashSet, io};
 
 use time::OffsetDateTime;
 
@@ -85,6 +85,24 @@ where
     }
     fn catalog_planning(&mut self) -> Result<Vec<CatalogPlanningChore>, Self::Error> {
         Self::catalog_planning(self)
+            .map_err(EditorDataError::Persistence)
+            .map_err(ApplicationError::Editor)
+    }
+
+    fn catalog_dismissals(&mut self) -> Result<HashSet<String>, Self::Error> {
+        Self::catalog_dismissals(self)
+            .map_err(EditorDataError::Persistence)
+            .map_err(ApplicationError::Editor)
+    }
+
+    fn dismiss_catalog_template(&mut self, template_id: &str) -> Result<(), Self::Error> {
+        Self::dismiss_catalog_template(self, template_id)
+            .map_err(EditorDataError::Persistence)
+            .map_err(ApplicationError::Editor)
+    }
+
+    fn reset_catalog_dismissals(&mut self) -> Result<usize, Self::Error> {
+        Self::reset_catalog_dismissals(self)
             .map_err(EditorDataError::Persistence)
             .map_err(ApplicationError::Editor)
     }

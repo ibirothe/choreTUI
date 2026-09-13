@@ -112,6 +112,8 @@ pub enum CatalogAction {
     Close,
     Help,
     Select(String),
+    Dismiss(String),
+    ResetDismissals,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,6 +121,28 @@ pub enum PlanningStatus {
     Planned,
     PossibleDuplicate,
     Unplanned,
+}
+
+/// Transparent, deterministic lens used by guided planning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuidedSweep {
+    CoverageGaps,
+    Bathroom,
+    QuickTasks,
+    MonthlyMaintenance,
+    SafetyChecks,
+}
+
+impl GuidedSweep {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CoverageGaps => "Coverage gaps",
+            Self::Bathroom => "Bathroom",
+            Self::QuickTasks => "Quick tasks",
+            Self::MonthlyMaintenance => "Monthly maintenance",
+            Self::SafetyChecks => "Safety checks",
+        }
+    }
 }
 
 /// Deterministic search, multi-facet, selection, and scroll state.
@@ -136,6 +160,11 @@ pub struct CatalogBrowserState {
     planned_template_ids: HashSet<String>,
     possible_duplicate_ids: HashSet<String>,
     status: Option<String>,
+    guided_sweep: Option<GuidedSweep>,
+    dismissed_template_ids: HashSet<String>,
+    reveal_hidden: bool,
+    uncovered_areas: HashSet<Area>,
+    uncovered_activity_types: HashSet<ActivityType>,
 }
 
 impl CatalogBrowserState {
@@ -154,7 +183,47 @@ impl CatalogBrowserState {
             planned_template_ids: HashSet::new(),
             possible_duplicate_ids: HashSet::new(),
             status: None,
+            guided_sweep: None,
+            dismissed_template_ids: HashSet::new(),
+            reveal_hidden: false,
+            uncovered_areas: ActivityCatalog::facet_metadata()
+                .areas
+                .iter()
+                .copied()
+                .collect(),
+            uncovered_activity_types: ActivityCatalog::facet_metadata()
+                .activity_types
+                .iter()
+                .copied()
+                .collect(),
         }
+    }
+
+    #[must_use]
+    pub fn guided(catalog: ActivityCatalog) -> Self {
+        let mut state = Self::new(catalog);
+        state.guided_sweep = Some(GuidedSweep::CoverageGaps);
+        state
+    }
+
+    #[must_use]
+    pub const fn is_guided(&self) -> bool {
+        self.guided_sweep.is_some()
+    }
+
+    pub fn set_dismissals(&mut self, dismissals: HashSet<String>) {
+        self.dismissed_template_ids = dismissals;
+        self.normalize_selection(None);
+    }
+
+    pub fn mark_dismissed(&mut self, template_id: String) {
+        self.dismissed_template_ids.insert(template_id);
+        self.normalize_selection(None);
+    }
+
+    pub fn clear_dismissals(&mut self) {
+        self.dismissed_template_ids.clear();
+        self.normalize_selection(None);
     }
 
     /// Refresh exact provenance matches and conservative normalized-name matches.
@@ -177,6 +246,37 @@ impl CatalogBrowserState {
             })
             .map(|activity| activity.id.clone())
             .collect();
+        let mut covered_areas = HashSet::new();
+        let mut covered_types = HashSet::new();
+        for chore in chores {
+            let matched = chore
+                .provenance
+                .as_ref()
+                .and_then(|value| self.catalog.find(&value.template_id))
+                .or_else(|| {
+                    let name = normalize_name(&chore.name);
+                    self.catalog
+                        .activities()
+                        .find(|activity| normalize_name(&activity.name) == name)
+                });
+            if let Some(activity) = matched {
+                covered_areas.extend(activity.areas.iter().copied());
+                covered_types.extend(activity.activity_types.iter().copied());
+            }
+        }
+        self.uncovered_areas = ActivityCatalog::facet_metadata()
+            .areas
+            .iter()
+            .copied()
+            .filter(|area| !covered_areas.contains(area))
+            .collect();
+        self.uncovered_activity_types = ActivityCatalog::facet_metadata()
+            .activity_types
+            .iter()
+            .copied()
+            .filter(|kind| !covered_types.contains(kind))
+            .collect();
+        self.normalize_selection(None);
     }
 
     pub fn set_status(&mut self, status: Option<String>) {
@@ -243,6 +343,13 @@ impl CatalogBrowserState {
                         .is_some_and(|description| description.to_lowercase().contains(&needle))
             })
             .filter(|activity| self.filters.matches(activity))
+            .filter(|activity| self.matches_guided_sweep(activity))
+            .filter(|activity| {
+                self.guided_sweep.is_none()
+                    || self.reveal_hidden
+                    || (self.planning_status(&activity.id) == PlanningStatus::Unplanned
+                        && !self.dismissed_template_ids.contains(&activity.id))
+            })
             .collect()
     }
 
@@ -289,6 +396,27 @@ impl CatalogBrowserState {
                 self.input_mode = InputMode::Filter;
             }
             KeyCode::Char('c') => self.clear_all(),
+            KeyCode::Char('1'..='5') if self.is_guided() => {
+                self.guided_sweep = match key.code {
+                    KeyCode::Char('1') => Some(GuidedSweep::CoverageGaps),
+                    KeyCode::Char('2') => Some(GuidedSweep::Bathroom),
+                    KeyCode::Char('3') => Some(GuidedSweep::QuickTasks),
+                    KeyCode::Char('4') => Some(GuidedSweep::MonthlyMaintenance),
+                    _ => Some(GuidedSweep::SafetyChecks),
+                };
+                self.selected = 0;
+                self.scroll = 0;
+            }
+            KeyCode::Char('v') if self.is_guided() => {
+                self.reveal_hidden = !self.reveal_hidden;
+                self.normalize_selection(None);
+            }
+            KeyCode::Char('x') if self.is_guided() => {
+                return self
+                    .selected_activity()
+                    .map(|activity| CatalogAction::Dismiss(activity.id.clone()));
+            }
+            KeyCode::Char('R') if self.is_guided() => return Some(CatalogAction::ResetDismissals),
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
             KeyCode::PageUp => self.move_selection(-10),
@@ -547,6 +675,9 @@ impl CatalogBrowserState {
     }
 
     fn match_reason(&self, activity: &ActivityTemplate) -> String {
+        if let Some(reason) = self.guided_reason(activity) {
+            return reason;
+        }
         let mut reasons = Vec::new();
         if !self.search.is_empty() {
             reasons.push(format!("text ‘{}’", self.search));
@@ -594,6 +725,86 @@ impl CatalogBrowserState {
             format!("Matches: {}", reasons.join(", "))
         }
     }
+
+    fn matches_guided_sweep(&self, activity: &ActivityTemplate) -> bool {
+        match self.guided_sweep {
+            None => true,
+            Some(GuidedSweep::CoverageGaps) => {
+                activity
+                    .areas
+                    .iter()
+                    .any(|area| self.uncovered_areas.contains(area))
+                    || activity
+                        .activity_types
+                        .iter()
+                        .any(|kind| self.uncovered_activity_types.contains(kind))
+            }
+            Some(GuidedSweep::Bathroom) => activity.areas.contains(&Area::Bathroom),
+            Some(GuidedSweep::QuickTasks) => activity.effort == Effort::Quick,
+            Some(GuidedSweep::MonthlyMaintenance) => {
+                activity.activity_types.contains(&ActivityType::Maintenance)
+                    && activity
+                        .suggested_cadence
+                        .as_ref()
+                        .is_some_and(|cadence| cadence.kind == CadenceKind::Months)
+            }
+            Some(GuidedSweep::SafetyChecks) => safety_template(&activity.id),
+        }
+    }
+
+    fn guided_reason(&self, activity: &ActivityTemplate) -> Option<String> {
+        Some(match self.guided_sweep? {
+            GuidedSweep::CoverageGaps => {
+                if let Some(area) = activity
+                    .areas
+                    .iter()
+                    .find(|area| self.uncovered_areas.contains(area))
+                {
+                    format!(
+                        "Suggested because no active planned chore covers {}.",
+                        area_label(*area)
+                    )
+                } else if let Some(kind) = activity
+                    .activity_types
+                    .iter()
+                    .find(|kind| self.uncovered_activity_types.contains(kind))
+                {
+                    format!(
+                        "Suggested because no active planned chore covers {} work.",
+                        activity_type_label(*kind)
+                    )
+                } else {
+                    "No uncovered facet applies.".to_owned()
+                }
+            }
+            GuidedSweep::Bathroom => {
+                "Included in the user-selected Bathroom planning sweep.".to_owned()
+            }
+            GuidedSweep::QuickTasks => {
+                "Included because the catalog marks this as a quick-effort task.".to_owned()
+            }
+            GuidedSweep::MonthlyMaintenance => {
+                "Included because it is maintenance with a monthly cadence suggestion.".to_owned()
+            }
+            GuidedSweep::SafetyChecks => {
+                "Included in the curated household safety-check sweep.".to_owned()
+            }
+        })
+    }
+}
+
+fn safety_template(template_id: &str) -> bool {
+    matches!(
+        template_id,
+        "whole_home.test_smoke_alarms"
+            | "whole_home.test_carbon_monoxide_alarms"
+            | "whole_home.inspect_fire_extinguisher"
+            | "whole_home.inspect_visible_leaks"
+            | "whole_home.inspect_first_aid_kit"
+            | "whole_home.practice_fire_escape_plan"
+            | "whole_home.inspect_alarm_age"
+            | "outdoor.inspect_paths_railings"
+    )
 }
 
 fn toggle_set<T: Copy + Eq + std::hash::Hash>(set: &mut HashSet<T>, value: T) {
@@ -731,21 +942,40 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState)
                     if *selected { 'x' } else { ' ' }
                 )
             });
-    let lines = vec![
-        Line::from(format!("[{mode}] Query: {search}")),
-        Line::from(format!(
-            "Filters ({}): {}",
-            state.filters.selected_count(),
-            state.filter_summary()
-        )),
-        Line::from(format!(
-            "{}: {}  ({}/{})",
-            state.filter_focus.label(),
-            current_option,
-            state.facet_cursor.saturating_add(1),
-            options.len()
-        )),
-    ];
+    let lines = if let Some(sweep) = state.guided_sweep {
+        vec![
+            Line::from(format!("[GUIDED {mode}] What might I be overlooking?")),
+            Line::from(format!(
+                "Sweep: {} · 1 Gaps  2 Bathroom  3 Quick  4 Monthly maintenance  5 Safety",
+                sweep.label()
+            )),
+            Line::from(format!(
+                "Query: {search} · {} dismissed · hidden items {}",
+                state.dismissed_template_ids.len(),
+                if state.reveal_hidden {
+                    "shown"
+                } else {
+                    "excluded"
+                }
+            )),
+        ]
+    } else {
+        vec![
+            Line::from(format!("[{mode}] Query: {search}")),
+            Line::from(format!(
+                "Filters ({}): {}",
+                state.filters.selected_count(),
+                state.filter_summary()
+            )),
+            Line::from(format!(
+                "{}: {}  ({}/{})",
+                state.filter_focus.label(),
+                current_option,
+                state.facet_cursor.saturating_add(1),
+                options.len()
+            )),
+        ]
+    };
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::default()
@@ -815,7 +1045,16 @@ fn render_results(frame: &mut Frame<'_>, area: Rect, state: &mut CatalogBrowserS
         state.catalog.activities().count(),
         indicators
     );
-    let lines = if activities.is_empty() {
+    let lines = if activities.is_empty() && state.is_guided() {
+        vec![
+            Line::styled(
+                "Nothing is being flagged in this sweep.",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Line::from("This is a planning aid, not a household score."),
+            Line::from("Try another numbered sweep or press v to reveal hidden items."),
+        ]
+    } else if activities.is_empty() {
         vec![
             Line::styled(
                 "No activities match.",
@@ -836,6 +1075,7 @@ fn render_results(frame: &mut Frame<'_>, area: Rect, state: &mut CatalogBrowserS
                     position == state.selected,
                     usize::from(area.width.saturating_sub(2)),
                     state.planning_status(&activity.id),
+                    state.dismissed_template_ids.contains(&activity.id),
                 )
             })
             .collect()
@@ -853,6 +1093,7 @@ fn result_line(
     selected: bool,
     width: usize,
     planning: PlanningStatus,
+    dismissed: bool,
 ) -> Line<'static> {
     let cursor = if selected { ">" } else { " " };
     let area = activity.areas.first().copied().map_or("—", area_label);
@@ -861,10 +1102,14 @@ fn result_line(
         .first()
         .copied()
         .map_or("—", activity_type_label);
-    let marker = match planning {
-        PlanningStatus::Planned => " [planned]",
-        PlanningStatus::PossibleDuplicate => " [possible duplicate]",
-        PlanningStatus::Unplanned => "",
+    let marker = if dismissed {
+        " [dismissed]"
+    } else {
+        match planning {
+            PlanningStatus::Planned => " [planned]",
+            PlanningStatus::PossibleDuplicate => " [possible duplicate]",
+            PlanningStatus::Unplanned => "",
+        }
     };
     let text = format!(
         "{cursor} {}{marker} · {area} · {kind} · {} · {}",
@@ -925,10 +1170,14 @@ fn render_preview(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState
                 Line::from(format!("Suggested cadence: {}", cadence_label(activity))),
                 Line::from(format!(
                     "Planning: {}",
-                    match state.planning_status(&activity.id) {
-                        PlanningStatus::Planned => "Planned from this catalog template",
-                        PlanningStatus::PossibleDuplicate => "Possible duplicate by chore name",
-                        PlanningStatus::Unplanned => "Not planned",
+                    if state.dismissed_template_ids.contains(&activity.id) {
+                        "Dismissed as not relevant"
+                    } else {
+                        match state.planning_status(&activity.id) {
+                            PlanningStatus::Planned => "Planned from this catalog template",
+                            PlanningStatus::PossibleDuplicate => "Possible duplicate by chore name",
+                            PlanningStatus::Unplanned => "Not planned",
+                        }
                     }
                 )),
                 Line::from(""),
@@ -950,13 +1199,17 @@ fn render_preview(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState
 }
 
 fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &CatalogBrowserState) {
-    let hint = match state.input_mode {
-        InputMode::Navigate => {
-            "j/k Move  Enter Use  p Preview  / Search  f/Tab Filters  c Clear  ? Help  Esc Back"
-        }
-        InputMode::Search => "Type to search  Backspace edit  Enter/Esc browse",
-        InputMode::Filter => {
-            "Tab facet  h/l or arrows option  Space toggle  c Clear  Enter/Esc browse  ? Help"
+    let hint = if state.is_guided() && matches!(state.input_mode, InputMode::Navigate) {
+        "1–5 Sweep  j/k Move  Enter Use  x Dismiss  v Show hidden  R Reset  ? Help  Esc Back"
+    } else {
+        match state.input_mode {
+            InputMode::Navigate => {
+                "j/k Move  Enter Use  p Preview  / Search  f/Tab Filters  c Clear  ? Help  Esc Back"
+            }
+            InputMode::Search => "Type to search  Backspace edit  Enter/Esc browse",
+            InputMode::Filter => {
+                "Tab facet  h/l or arrows option  Space toggle  c Clear  Enter/Esc browse  ? Help"
+            }
         }
     };
     frame.render_widget(
@@ -1171,6 +1424,88 @@ mod tests {
             Some(CatalogAction::Select(expected))
         );
         assert_eq!(state.search(), "scrub");
+    }
+
+    #[test]
+    fn guided_gaps_are_broad_then_shrink_with_transparent_coverage() {
+        let catalog = ActivityCatalog::bundled().expect("catalog should load");
+        let mut guided = CatalogBrowserState::guided(catalog);
+        guided.set_planning(&[]);
+        assert_eq!(guided.matching_activities().len(), 148);
+        assert!(
+            guided
+                .selected_activity()
+                .map(|activity| guided
+                    .match_reason(activity)
+                    .contains("no active planned chore"))
+                .unwrap_or(false)
+        );
+
+        guided.set_planning(&[CatalogPlanningChore {
+            name: "Renamed bathroom task".to_owned(),
+            provenance: Some(crate::app::editor::TemplateProvenance {
+                template_id: "bathroom.clean_basin".to_owned(),
+                schema_version: 1,
+                catalog_version: 2,
+                locale: "en".to_owned(),
+            }),
+        }]);
+        assert!(
+            guided
+                .matching_activities()
+                .iter()
+                .all(|activity| activity.id != "bathroom.clean_basin")
+        );
+        assert!(
+            guided
+                .matching_activities()
+                .iter()
+                .any(|activity| activity.id == "kitchen.clean_sink")
+        );
+    }
+
+    #[test]
+    fn guided_mode_excludes_planned_legacy_and_dismissed_items_until_revealed() {
+        let catalog = ActivityCatalog::bundled().expect("catalog should load");
+        let chores = catalog
+            .activities()
+            .map(|activity| CatalogPlanningChore {
+                name: activity.name.clone(),
+                provenance: Some(crate::app::editor::TemplateProvenance {
+                    template_id: activity.id.clone(),
+                    schema_version: 1,
+                    catalog_version: 2,
+                    locale: "en".to_owned(),
+                }),
+            })
+            .collect::<Vec<_>>();
+        let mut comprehensive = CatalogBrowserState::guided(catalog.clone());
+        comprehensive.set_planning(&chores);
+        assert!(comprehensive.matching_activities().is_empty());
+
+        let mut guided = CatalogBrowserState::guided(catalog);
+        guided.handle_key(key(KeyCode::Char('2')));
+        guided.set_planning(&[CatalogPlanningChore {
+            name: "CLEAN THE BATHROOM BASIN".to_owned(),
+            provenance: None,
+        }]);
+        guided.set_dismissals(HashSet::from(["bathroom.clean_toilet".to_owned()]));
+        let visible = guided
+            .matching_activities()
+            .iter()
+            .map(|activity| activity.id.as_str())
+            .collect::<Vec<_>>();
+        assert!(!visible.contains(&"bathroom.clean_basin"));
+        assert!(!visible.contains(&"bathroom.clean_toilet"));
+
+        guided.handle_key(key(KeyCode::Char('v')));
+        let revealed = guided
+            .matching_activities()
+            .iter()
+            .map(|activity| activity.id.as_str())
+            .collect::<Vec<_>>();
+        assert!(revealed.contains(&"bathroom.clean_basin"));
+        assert!(revealed.contains(&"bathroom.clean_toilet"));
     }
 
     #[test]

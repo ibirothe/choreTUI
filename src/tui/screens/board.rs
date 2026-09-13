@@ -206,7 +206,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, state: &BoardState) {
     let default_hints = if area.width < 70 {
         "? Help  q Quit  ←/→ Day  [/] Week"
     } else {
-        "? Help  q Quit  ←/h →/l Day  ↑/k ↓/j Chore  [/] Week  Space Toggle  a Add  e Edit  c List"
+        "? Help  q Quit  ←/h →/l Day  ↑/k ↓/j Chore  [/] Week  Space Toggle  a Add  g Guided  e Edit  c List"
     };
     let hints = state.status().unwrap_or(default_hints);
     frame.render_widget(

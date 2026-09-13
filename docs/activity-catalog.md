@@ -146,6 +146,30 @@ same normalized name are marked as possible duplicates; the warning never
 blocks creating another chore. Saving or cancelling returns to the previous
 query, filters, selection, and scroll position.
 
+## Guided planning semantics
+
+The Weekly Board's `g` command opens “What might I be overlooking?” planning.
+It offers five explicit, keyboard-selectable sweeps:
+
+1. Coverage gaps compares active chores with catalog areas and activity types.
+2. Bathroom lists activities tagged for that area.
+3. Quick tasks lists templates with quick effort.
+4. Monthly maintenance combines the maintenance type with monthly cadence.
+5. Safety checks uses a reviewed set of stable template IDs for household
+   alarms, fire readiness, visible leaks, first aid, and safe access.
+
+Coverage recognizes exact template provenance and equivalent normalized names
+from legacy or free-form chores. A gap means no recognized active chore covers
+an area or activity type; it is an explanation, not a score or claim about the
+quality of a household. An empty plan therefore gets broad starting points,
+while a comprehensively represented plan may have no gap results.
+
+Planned, equivalent legacy, and dismissed templates are excluded from guided
+results by default. `v` reveals them with textual state markers. `x` persists a
+local “not relevant to me” dismissal without changing chores, and `R` resets
+all dismissals. Selecting a suggestion still routes through the same editable
+form and requires an explicit Save.
+
 The result marker (`>`), filter checkboxes (`[x]`), active-filter summary,
 result count, scroll arrows, and textual match explanation communicate state
 without relying on color. Press `c` to clear search and every facet, `?` for

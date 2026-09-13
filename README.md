@@ -32,6 +32,7 @@ The Weekly Board is the startup screen. Press `?` for contextual, scrollable hel
 | Arrows or `h`/`j`/`k`/`l` | Navigate days and chores |
 | `Space` | Toggle pending/completed |
 | `a` / `e` | Add / edit a chore |
+| `g` | Guided “What might I be overlooking?” planning |
 | `d` / `D` | Disable / soft-delete a chore |
 | `c` | Open the Chore List |
 | `[` / `]`, `PageUp` / `PageDown` | Previous / next ISO week |
@@ -48,6 +49,14 @@ Press `Enter` on a result to copy its editable defaults into the chore editor.
 Filters use OR within a dimension and AND across dimensions. Planned templates
 and possible same-name duplicates are marked; only an explicit Save creates a
 chore.
+
+Press `g` on the Weekly Board for guided “What might I be overlooking?”
+planning. Number keys select coverage gaps, Bathroom, Quick tasks, Monthly
+maintenance, or Safety checks. Exact and equivalent legacy chores are excluded
+by default. Use `x` to dismiss an irrelevant suggestion, `v` to reveal planned
+and dismissed items, and `R` to reset dismissals. Reasons are local,
+deterministic, and descriptive—there is no household score or automatic
+creation.
 
 ## Configuration
 

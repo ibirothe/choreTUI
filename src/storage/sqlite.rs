@@ -1,6 +1,6 @@
 //! SQLite repository adapter and transactional persistence use cases.
 
-use std::{path::Path, time::Duration as StdDuration};
+use std::{collections::HashSet, path::Path, time::Duration as StdDuration};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
 use thiserror::Error;
@@ -484,6 +484,35 @@ impl AtomicEditorStore for SqliteStore {
                 },
             )
             .optional()
+            .map_err(SqliteError::from)
+    }
+
+    fn catalog_dismissals(&self) -> Result<HashSet<String>, Self::Error> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT template_id FROM catalog_dismissals ORDER BY template_id")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<HashSet<_>, _>>()
+            .map_err(SqliteError::from)
+    }
+
+    fn dismiss_catalog_template(
+        &mut self,
+        template_id: &str,
+        dismissed_at: Timestamp,
+    ) -> Result<(), Self::Error> {
+        self.connection.execute(
+            "INSERT INTO catalog_dismissals(template_id, dismissed_at) VALUES (?1, ?2) \
+             ON CONFLICT(template_id) DO UPDATE SET dismissed_at = excluded.dismissed_at",
+            params![template_id, format_timestamp(dismissed_at)?],
+        )?;
+        Ok(())
+    }
+
+    fn reset_catalog_dismissals(&mut self) -> Result<usize, Self::Error> {
+        self.connection
+            .execute("DELETE FROM catalog_dismissals", [])
             .map_err(SqliteError::from)
     }
 
