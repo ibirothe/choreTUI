@@ -22,13 +22,15 @@ schema version:
 
 ```toml
 schema_version = 1
+catalog_version = 1
 locale = "en"
 ```
 
-`schema_version` changes only for incompatible structural changes. Content
-releases are tracked by source control and stable activity IDs. `locale` uses a
-BCP 47-style language tag. Schema v1 ships English text; future localized files
-reuse the same stable IDs and controlled facet codes.
+`schema_version` changes only for incompatible structural changes.
+`catalog_version` is a positive, monotonically increasing release number for
+content within that schema. `locale` uses a BCP 47-style language tag. Schema
+v1 ships English text; future localized files reuse the same stable IDs and
+controlled facet codes.
 
 Unknown fields and unknown enum values are errors. This intentionally makes
 typos visible during review instead of silently weakening discovery.
@@ -187,6 +189,22 @@ remains equivalent; region-specific activities receive their own IDs.
 - [ ] ID is stable, locale-independent, and not reused.
 - [ ] Deprecation points to an existing active replacement when supplied.
 - [ ] The full catalog passes automated parsing and semantic validation.
+
+## Contributing catalog entries
+
+1. Add or revise entries in `catalog/en-v1.toml` using the schema above.
+2. Preserve existing IDs; deprecate an identity instead of deleting or
+   repurposing it.
+3. Increase `catalog_version` for every released content change.
+4. Apply the review checklist to each changed entry and review category balance
+   across the complete catalog.
+5. Run `cargo fmt --all --check`, strict Clippy, and
+   `cargo test --all-targets --all-features --locked`. The catalog test parses
+   every shipped entry and verifies complete controlled-facet coverage.
+
+`catalog/examples-v1.toml` remains a focused schema fixture. Product content
+lives in `catalog/en-v1.toml` and is compiled into the binary, so loading never
+depends on the network or a mutable installation file.
 
 ## Compatibility rules
 

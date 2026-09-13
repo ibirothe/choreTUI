@@ -9,6 +9,7 @@ use thiserror::Error;
 
 /// Catalog schema understood by this release.
 pub const SUPPORTED_SCHEMA_VERSION: u16 = 1;
+const BUNDLED_CATALOG: &str = include_str!("../../catalog/en-v1.toml");
 
 /// One localized catalog document.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub const SUPPORTED_SCHEMA_VERSION: u16 = 1;
 pub struct CatalogDocument {
     /// Version of the structural schema, independent of content releases.
     pub schema_version: u16,
+    /// Monotonically increasing release of content within this schema.
+    pub catalog_version: u32,
     /// BCP 47-style language tag for the user-facing text in this document.
     pub locale: String,
     /// Curated activity templates.
@@ -44,6 +47,9 @@ impl CatalogDocument {
         if self.schema_version != SUPPORTED_SCHEMA_VERSION {
             return Err(CatalogError::UnsupportedSchemaVersion(self.schema_version));
         }
+        if self.catalog_version == 0 {
+            return Err(CatalogError::CatalogVersion(self.catalog_version));
+        }
         if !valid_locale(&self.locale) {
             return Err(CatalogError::Locale(self.locale.clone()));
         }
@@ -66,6 +72,111 @@ impl CatalogDocument {
         }
         Ok(())
     }
+}
+
+/// Immutable, deterministically ordered activity catalog used by application
+/// and presentation layers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivityCatalog {
+    document: CatalogDocument,
+}
+
+impl ActivityCatalog {
+    /// Load and validate the catalog compiled into the application binary.
+    ///
+    /// # Errors
+    ///
+    /// Returns a catalog validation error when bundled product content violates
+    /// the supported schema. CI validates the same data before release.
+    pub fn bundled() -> Result<Self, CatalogError> {
+        Self::from_document(CatalogDocument::parse(BUNDLED_CATALOG)?)
+    }
+
+    /// Build an immutable catalog from a validated document.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first schema or content invariant that is violated.
+    pub fn from_document(mut document: CatalogDocument) -> Result<Self, CatalogError> {
+        document.validate()?;
+        document
+            .activities
+            .sort_by_cached_key(|activity| (activity.name.to_lowercase(), activity.id.clone()));
+        Ok(Self { document })
+    }
+
+    /// Return active templates in deterministic, case-insensitive name order.
+    pub fn activities(&self) -> impl Iterator<Item = &ActivityTemplate> {
+        self.document
+            .activities
+            .iter()
+            .filter(|activity| activity.status == TemplateStatus::Active)
+    }
+
+    /// Return active and deprecated templates in deterministic name order.
+    pub fn all_templates(&self) -> impl ExactSizeIterator<Item = &ActivityTemplate> {
+        self.document.activities.iter()
+    }
+
+    /// Find a template by its stable, locale-independent identifier.
+    #[must_use]
+    pub fn find(&self, id: &str) -> Option<&ActivityTemplate> {
+        self.document
+            .activities
+            .iter()
+            .find(|activity| activity.id == id)
+    }
+
+    /// Return version and locale information suitable for persisted provenance.
+    #[must_use]
+    pub const fn provenance(&self) -> CatalogProvenance<'_> {
+        CatalogProvenance {
+            schema_version: self.document.schema_version,
+            catalog_version: self.document.catalog_version,
+            locale: &self.document.locale,
+        }
+    }
+
+    /// Return every supported controlled facet value in display order.
+    #[must_use]
+    pub const fn facet_metadata() -> FacetMetadata {
+        FacetMetadata {
+            areas: &Area::ALL,
+            activity_types: &ActivityType::ALL,
+            efforts: &Effort::ALL,
+            contexts: &ActivityContext::ALL,
+            cadence_kinds: &CadenceKind::ALL,
+            duration_bands: &DurationBand::ALL,
+        }
+    }
+}
+
+/// Catalog identity copied alongside a chosen template ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CatalogProvenance<'a> {
+    /// Structural schema version.
+    pub schema_version: u16,
+    /// Content release within the schema.
+    pub catalog_version: u32,
+    /// Locale of the copied user-facing text.
+    pub locale: &'a str,
+}
+
+/// Complete controlled-facet vocabulary for catalog browsing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FacetMetadata {
+    /// Areas in stable display order.
+    pub areas: &'static [Area],
+    /// Activity types in stable display order.
+    pub activity_types: &'static [ActivityType],
+    /// Effort levels in ascending order.
+    pub efforts: &'static [Effort],
+    /// Situational contexts in stable display order.
+    pub contexts: &'static [ActivityContext],
+    /// Suggested cadence families in stable display order.
+    pub cadence_kinds: &'static [CadenceKind],
+    /// Derived duration bands in ascending order.
+    pub duration_bands: &'static [DurationBand],
 }
 
 /// A curated suggestion that can later be copied into a user-owned chore.
@@ -128,6 +239,24 @@ pub enum Area {
     PersonalAdmin,
 }
 
+impl Area {
+    /// All area values in stable display order.
+    pub const ALL: [Self; 12] = [
+        Self::Bathroom,
+        Self::Kitchen,
+        Self::Bedroom,
+        Self::LivingSpace,
+        Self::Workspace,
+        Self::Entrance,
+        Self::Storage,
+        Self::Laundry,
+        Self::Outdoor,
+        Self::Vehicle,
+        Self::WholeHome,
+        Self::PersonalAdmin,
+    ];
+}
+
 /// Functional kind of work.
 #[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -152,6 +281,21 @@ pub enum ActivityType {
     Administration,
 }
 
+impl ActivityType {
+    /// All activity-type values in stable display order.
+    pub const ALL: [Self; 9] = [
+        Self::Cleaning,
+        Self::Laundry,
+        Self::Maintenance,
+        Self::Inspection,
+        Self::Organization,
+        Self::Replenishment,
+        Self::Disposal,
+        Self::Care,
+        Self::Administration,
+    ];
+}
+
 /// Qualitative effort needed to start and complete an activity.
 #[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -162,6 +306,11 @@ pub enum Effort {
     Medium,
     /// Significant setup, attention, or physical effort.
     Substantial,
+}
+
+impl Effort {
+    /// All effort values from lowest to highest activation effort.
+    pub const ALL: [Self; 3] = [Self::Quick, Self::Medium, Self::Substantial];
 }
 
 /// Situational filter for activity discovery.
@@ -180,6 +329,18 @@ pub enum ActivityContext {
     NoPreparation,
     /// Requires leaving home or combining with an errand.
     Errand,
+}
+
+impl ActivityContext {
+    /// All situational context values in stable display order.
+    pub const ALL: [Self; 6] = [
+        Self::Indoors,
+        Self::Outdoors,
+        Self::Physical,
+        Self::Quiet,
+        Self::NoPreparation,
+        Self::Errand,
+    ];
 }
 
 /// Non-binding recurrence guidance attached to a template.
@@ -206,6 +367,43 @@ pub enum CadenceKind {
     Seasonal,
 }
 
+impl CadenceKind {
+    /// All cadence families in stable display order.
+    pub const ALL: [Self; 4] = [Self::Days, Self::Weeks, Self::Months, Self::Seasonal];
+}
+
+/// Derived duration range used by catalog filters.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum DurationBand {
+    /// Less than ten minutes.
+    UnderTenMinutes,
+    /// From ten through thirty minutes.
+    TenToThirtyMinutes,
+    /// More than thirty minutes.
+    OverThirtyMinutes,
+}
+
+impl DurationBand {
+    /// All duration bands from shortest to longest.
+    pub const ALL: [Self; 3] = [
+        Self::UnderTenMinutes,
+        Self::TenToThirtyMinutes,
+        Self::OverThirtyMinutes,
+    ];
+}
+
+impl ActivityTemplate {
+    /// Classify the validated active-time estimate for filtering.
+    #[must_use]
+    pub const fn duration_band(&self) -> DurationBand {
+        match self.estimated_minutes {
+            0..10 => DurationBand::UnderTenMinutes,
+            10..=30 => DurationBand::TenToThirtyMinutes,
+            _ => DurationBand::OverThirtyMinutes,
+        }
+    }
+}
+
 /// Lifecycle state of a bundled activity template.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -226,6 +424,9 @@ pub enum CatalogError {
     /// The document uses an unsupported schema.
     #[error("unsupported catalog schema version {0}")]
     UnsupportedSchemaVersion(u16),
+    /// The content release must be positive.
+    #[error("invalid catalog content version {0}")]
+    CatalogVersion(u32),
     /// The locale is empty or structurally invalid.
     #[error("invalid catalog locale {0:?}")]
     Locale(String),
@@ -441,8 +642,11 @@ fn valid_locale(locale: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::{
-        ActivityType, Area, CadenceKind, CatalogDocument, CatalogError, Effort, TemplateStatus,
+        ActivityCatalog, ActivityContext, ActivityType, Area, CadenceKind, CatalogDocument,
+        CatalogError, DurationBand, Effort, SUPPORTED_SCHEMA_VERSION, TemplateStatus,
     };
 
     const VALID: &str = include_str!("../../catalog/examples-v1.toml");
@@ -526,5 +730,93 @@ mod tests {
             deprecated.replaced_by.as_deref(),
             Some("bathroom.wipe_fixtures")
         );
+    }
+
+    #[test]
+    fn bundled_catalog_is_complete_valid_and_deterministic() {
+        let catalog = ActivityCatalog::bundled().expect("bundled catalog should be valid");
+        let activities = catalog.activities().collect::<Vec<_>>();
+
+        assert_eq!(activities.len(), 120);
+        assert_eq!(catalog.all_templates().len(), 120);
+        assert!(activities.iter().all(|activity| {
+            activity.status == TemplateStatus::Active
+                && activity.replaced_by.is_none()
+                && !activity.name.is_empty()
+        }));
+        assert!(activities.windows(2).all(|pair| {
+            (pair[0].name.to_lowercase(), pair[0].id.as_str())
+                <= (pair[1].name.to_lowercase(), pair[1].id.as_str())
+        }));
+    }
+
+    #[test]
+    fn bundled_catalog_covers_every_controlled_discovery_facet() {
+        let catalog = ActivityCatalog::bundled().expect("bundled catalog should be valid");
+        let areas = catalog
+            .activities()
+            .flat_map(|activity| activity.areas.iter().copied())
+            .collect::<HashSet<_>>();
+        let activity_types = catalog
+            .activities()
+            .flat_map(|activity| activity.activity_types.iter().copied())
+            .collect::<HashSet<_>>();
+        let efforts = catalog
+            .activities()
+            .map(|activity| activity.effort)
+            .collect::<HashSet<_>>();
+        let contexts = catalog
+            .activities()
+            .flat_map(|activity| activity.contexts.iter().copied())
+            .collect::<HashSet<_>>();
+        let cadence_kinds = catalog
+            .activities()
+            .filter_map(|activity| activity.suggested_cadence.as_ref())
+            .map(|cadence| cadence.kind)
+            .collect::<HashSet<_>>();
+        let duration_bands = catalog
+            .activities()
+            .map(super::ActivityTemplate::duration_band)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(areas, Area::ALL.into_iter().collect());
+        assert_eq!(activity_types, ActivityType::ALL.into_iter().collect());
+        assert_eq!(efforts, Effort::ALL.into_iter().collect());
+        assert_eq!(contexts, ActivityContext::ALL.into_iter().collect());
+        assert_eq!(cadence_kinds, CadenceKind::ALL.into_iter().collect());
+        assert_eq!(duration_bands, DurationBand::ALL.into_iter().collect());
+    }
+
+    #[test]
+    fn bundled_catalog_exposes_provenance_and_immutable_lookup() {
+        let catalog = ActivityCatalog::bundled().expect("bundled catalog should be valid");
+        let provenance = catalog.provenance();
+        let original = catalog
+            .find("bathroom.wipe_fixtures")
+            .expect("known activity should exist");
+        let mut detached = original.clone();
+        detached.name = "Changed copy".to_owned();
+
+        assert_eq!(provenance.schema_version, SUPPORTED_SCHEMA_VERSION);
+        assert_eq!(provenance.catalog_version, 1);
+        assert_eq!(provenance.locale, "en");
+        assert_eq!(
+            catalog
+                .find("bathroom.wipe_fixtures")
+                .map(|activity| activity.name.as_str()),
+            Some("Wipe bathroom fixtures")
+        );
+    }
+
+    #[test]
+    fn facet_metadata_has_stable_complete_order() {
+        let facets = ActivityCatalog::facet_metadata();
+
+        assert_eq!(facets.areas, &Area::ALL);
+        assert_eq!(facets.activity_types, &ActivityType::ALL);
+        assert_eq!(facets.efforts, &Effort::ALL);
+        assert_eq!(facets.contexts, &ActivityContext::ALL);
+        assert_eq!(facets.cadence_kinds, &CadenceKind::ALL);
+        assert_eq!(facets.duration_bands, &DurationBand::ALL);
     }
 }

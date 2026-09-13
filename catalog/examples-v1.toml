@@ -1,4 +1,5 @@
 schema_version = 1
+catalog_version = 1
 locale = "en"
 
 [[activities]]
