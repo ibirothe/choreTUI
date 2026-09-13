@@ -1296,7 +1296,7 @@ mod tests {
                     row.get::<_, i64>(0)
                 })
                 .expect("migration count should load"),
-            1
+            migrations::LATEST_VERSION
         );
         assert_eq!(
             reopened.integrity_check().expect("check should run"),

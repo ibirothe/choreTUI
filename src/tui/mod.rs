@@ -66,6 +66,10 @@ pub trait BoardApplication {
     /// Returns an application error when persistence cannot be read.
     fn list_chores(&mut self) -> Result<Vec<Chore>, Self::Error>;
     /// Load active chores and catalog identities for planned-activity markers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an application error when chores or provenance cannot be loaded.
     fn catalog_planning(&mut self) -> Result<Vec<CatalogPlanningChore>, Self::Error>;
     /// Disable a chore effective today.
     ///
@@ -653,16 +657,10 @@ pub fn run<A: BoardApplication>(application: A, config: crate::config::Config) -
         terminal.draw(|frame| {
             if let Some(help) = runtime.help() {
                 screens::help::render(frame, frame.area(), help);
-            } else if runtime.catalog_browser().is_some() && runtime.editor().is_some() {
-                screens::editor::render(
-                    frame,
-                    frame.area(),
-                    runtime.editor().expect("editor checked above"),
-                );
-            } else if let Some(catalog) = runtime.catalog_browser_mut() {
-                screens::catalog::render(frame, frame.area(), catalog);
             } else if let Some(editor) = runtime.editor() {
                 screens::editor::render(frame, frame.area(), editor);
+            } else if let Some(catalog) = runtime.catalog_browser_mut() {
+                screens::catalog::render(frame, frame.area(), catalog);
             } else if let Some(chore_list) = runtime.chore_list_mut() {
                 screens::chore_list::render(frame, frame.area(), chore_list);
             } else {

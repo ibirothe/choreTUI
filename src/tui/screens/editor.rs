@@ -10,6 +10,7 @@ use ratatui::{
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
+use time::Weekday;
 
 use crate::{
     app::editor::{ChoreSubmission, EditorRecord, SchedulePattern, TemplateProvenance},
@@ -148,9 +149,15 @@ impl EditorState {
         selected_date: CalendarDate,
         possible_duplicate: bool,
     ) -> Self {
-        let weekday =
-            IsoWeekday::try_from(selected_date.as_date().weekday().number_days_from_monday() + 1)
-                .expect("calendar weekdays always map to ISO weekdays");
+        let weekday = match selected_date.as_date().weekday() {
+            Weekday::Monday => IsoWeekday::Monday,
+            Weekday::Tuesday => IsoWeekday::Tuesday,
+            Weekday::Wednesday => IsoWeekday::Wednesday,
+            Weekday::Thursday => IsoWeekday::Thursday,
+            Weekday::Friday => IsoWeekday::Friday,
+            Weekday::Saturday => IsoWeekday::Saturday,
+            Weekday::Sunday => IsoWeekday::Sunday,
+        };
         let mut notice = possible_duplicate.then(|| {
             "Possible duplicate: an active chore has the same name. Saving another is allowed."
                 .to_owned()

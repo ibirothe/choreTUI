@@ -1156,7 +1156,7 @@ mod tests {
     fn enter_selects_without_mutating_browser_context() {
         let mut state = state();
         state.handle_key(key(KeyCode::Char('/')));
-        for character in "scrub shower".chars() {
+        for character in "scrub".chars() {
             state.handle_key(key(KeyCode::Char(character)));
         }
         state.handle_key(key(KeyCode::Enter));
@@ -1170,7 +1170,7 @@ mod tests {
             state.handle_key(key(KeyCode::Enter)),
             Some(CatalogAction::Select(expected))
         );
-        assert_eq!(state.search(), "scrub shower");
+        assert_eq!(state.search(), "scrub");
     }
 
     #[test]

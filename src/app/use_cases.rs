@@ -69,6 +69,10 @@ pub trait AtomicEditorStore {
     ) -> Result<(), Self::Error>;
 
     /// Load catalog provenance for a chore, when it originated from a template.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when provenance cannot be loaded.
     fn catalog_provenance(
         &self,
         chore_id: ChoreId,
@@ -308,13 +312,17 @@ where
     }
 
     /// Return active chores with optional catalog identity for browser markers.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter error when chores or their provenance cannot be loaded.
     pub fn catalog_planning(
         &self,
     ) -> Result<Vec<CatalogPlanningChore>, <P as AtomicEditorStore>::Error> {
         self.persistence
             .list(false)?
             .into_iter()
-            .filter(|chore| chore.is_enabled())
+            .filter(Chore::is_enabled)
             .map(|chore| {
                 Ok(CatalogPlanningChore {
                     name: chore.name().as_str().to_owned(),
