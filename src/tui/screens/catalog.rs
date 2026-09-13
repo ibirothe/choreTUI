@@ -1432,14 +1432,11 @@ mod tests {
         let mut guided = CatalogBrowserState::guided(catalog);
         guided.set_planning(&[]);
         assert_eq!(guided.matching_activities().len(), 148);
-        assert!(
+        assert!(guided.selected_activity().is_some_and(|activity| {
             guided
-                .selected_activity()
-                .map(|activity| guided
-                    .match_reason(activity)
-                    .contains("no active planned chore"))
-                .unwrap_or(false)
-        );
+                .match_reason(activity)
+                .contains("no active planned chore")
+        }));
 
         guided.set_planning(&[CatalogPlanningChore {
             name: "Renamed bathroom task".to_owned(),
