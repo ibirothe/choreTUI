@@ -115,6 +115,33 @@ over 30 minutes. Bands are not stored, preventing inconsistent classification.
 Context answers “Can I reasonably do this now?” Values describe relevant
 constraints, not every true property.
 
+## Browser filtering semantics
+
+Open Add Chore with `a`, then press `F2` to browse the catalog without changing
+the free-form editor. The browser starts with all active activities visible and
+does not create or modify chores.
+
+Text search is incremental and case-insensitive across activity names and
+descriptions. Facet values use inclusive OR within one dimension and AND across
+dimensions. For example, selecting Bathroom, Cleaning or Laundry, and Quick
+means:
+
+```text
+area is Bathroom
+AND type is Cleaning OR Laundry
+AND effort is Quick
+```
+
+An unselected dimension does not restrict results. Cadence filtering excludes
+activities without a cadence suggestion; duration bands are derived from the
+active-time estimate. Result order remains the catalog's deterministic
+case-insensitive name order.
+
+The result marker (`>`), filter checkboxes (`[x]`), active-filter summary,
+result count, scroll arrows, and textual match explanation communicate state
+without relying on color. Press `c` to clear search and every facet, `?` for
+contextual bindings, or `Esc` to return to the unchanged Add Chore form.
+
 ## Suggested cadence
 
 A cadence is guidance, never part of template identity and never an instruction

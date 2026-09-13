@@ -154,6 +154,11 @@ impl EditorState {
     }
 
     #[must_use]
+    pub const fn can_browse_catalog(&self) -> bool {
+        matches!(self.mode, EditorMode::Add) && !self.confirming_cancel
+    }
+
+    #[must_use]
     pub const fn focus(&self) -> EditorField {
         self.focus
     }
@@ -463,9 +468,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &EditorState) {
             Style::default().fg(Color::Red),
         ));
     }
-    lines.push(Line::from(
-        "Tab focus  Arrows choose  Space toggle  Ctrl+S save  Esc cancel",
-    ));
+    lines.push(Line::from(if matches!(state.mode, EditorMode::Add) {
+        "F2 catalog  Tab focus  Arrows choose  Space toggle  Ctrl+S save  Esc cancel"
+    } else {
+        "Tab focus  Arrows choose  Space toggle  Ctrl+S save  Esc cancel"
+    }));
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::default().borders(Borders::ALL).title(title))
