@@ -63,7 +63,10 @@ On startup, ChoreTUI resolves its configuration and database locations, applies 
 
 - Accounts, cloud sync, sharing, multi-user conflict resolution, or network dependencies.
 - A general calendar or RFC 5545 recurrence engine.
-- Times of day, time zones per chore, durations, reminders, dependencies, priorities, tags, or subtasks.
+- Times of day, time zones per chore, reminders, dependencies, priorities,
+  user-defined chore tags, or subtasks. Curated activity-catalog templates may
+  carry controlled discovery facets and an estimated duration; these are copied
+  as suggestions and do not change the persisted chore model.
 - Mobile or graphical interfaces.
 - Hard deletion of historical data from the interactive application.
 

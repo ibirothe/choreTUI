@@ -1,0 +1,92 @@
+schema_version = 1
+locale = "en"
+
+[[activities]]
+id = "bathroom.wipe_fixtures"
+name = "Wipe bathroom fixtures"
+description = "Remove dust, water spots, and residue from taps and exposed fittings."
+areas = ["bathroom"]
+activity_types = ["cleaning"]
+effort = "quick"
+estimated_minutes = 5
+contexts = ["indoors", "no_preparation"]
+status = "active"
+
+[activities.suggested_cadence]
+kind = "weeks"
+interval = 1
+
+[[activities]]
+id = "bathroom.clean_drain"
+name = "Clean the shower drain"
+description = "Remove visible debris and clean the accessible drain cover."
+areas = ["bathroom"]
+activity_types = ["cleaning", "maintenance"]
+effort = "medium"
+estimated_minutes = 20
+contexts = ["indoors"]
+status = "active"
+
+[activities.suggested_cadence]
+kind = "months"
+interval = 1
+
+[[activities]]
+id = "kitchen.wipe_refrigerator"
+name = "Wipe the refrigerator interior"
+description = "Check stored food and wipe shelves, drawers, and obvious spills."
+areas = ["kitchen"]
+activity_types = ["cleaning", "inspection"]
+effort = "medium"
+estimated_minutes = 25
+contexts = ["indoors"]
+status = "active"
+
+[activities.suggested_cadence]
+kind = "months"
+interval = 1
+
+[[activities]]
+id = "whole_home.test_smoke_alarms"
+name = "Test smoke alarms"
+description = "Use each alarm's test function and follow the manufacturer's instructions."
+areas = ["whole_home"]
+activity_types = ["inspection", "maintenance"]
+effort = "quick"
+estimated_minutes = 10
+contexts = ["indoors", "no_preparation"]
+status = "active"
+
+[activities.suggested_cadence]
+kind = "seasonal"
+
+[[activities]]
+id = "personal_admin.organize_paperwork"
+name = "Organize household paperwork"
+description = "Sort new documents and file or discard them as appropriate."
+areas = ["personal_admin", "whole_home"]
+activity_types = ["organization", "administration"]
+effort = "medium"
+estimated_minutes = 30
+contexts = ["indoors", "quiet"]
+status = "active"
+
+[activities.suggested_cadence]
+kind = "weeks"
+interval = 4
+
+[[activities]]
+id = "bathroom.polish_fittings"
+name = "Polish bathroom fittings"
+description = "Legacy wording retained to demonstrate stable catalog deprecation."
+areas = ["bathroom"]
+activity_types = ["cleaning"]
+effort = "quick"
+estimated_minutes = 10
+contexts = ["indoors"]
+status = "deprecated"
+replaced_by = "bathroom.wipe_fixtures"
+
+[activities.suggested_cadence]
+kind = "weeks"
+interval = 1
