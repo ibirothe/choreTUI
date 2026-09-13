@@ -267,10 +267,10 @@ impl CatalogBrowserState {
             KeyCode::Esc | KeyCode::Enter => self.input_mode = InputMode::Navigate,
             KeyCode::Tab => self.move_filter_focus(1),
             KeyCode::BackTab => self.move_filter_focus(-1),
-            KeyCode::Left | KeyCode::Char('h') | KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Left | KeyCode::Char('h' | 'k') | KeyCode::Up => {
                 self.move_facet_cursor(-1);
             }
-            KeyCode::Right | KeyCode::Char('l') | KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Right | KeyCode::Char('l' | 'j') | KeyCode::Down => {
                 self.move_facet_cursor(1);
             }
             KeyCode::Char(' ') => self.toggle_current_facet(),
@@ -351,7 +351,7 @@ impl CatalogBrowserState {
         let metadata = ActivityCatalog::facet_metadata();
         match self.filter_focus {
             FilterFocus::Area => {
-                toggle_set(&mut self.filters.areas, metadata.areas[self.facet_cursor])
+                toggle_set(&mut self.filters.areas, metadata.areas[self.facet_cursor]);
             }
             FilterFocus::ActivityType => toggle_set(
                 &mut self.filters.activity_types,
