@@ -134,7 +134,7 @@ where
 ///
 /// Returns an I/O error when the terminal cannot be entered, rendered, or
 /// restored.
-pub fn run(store: SqliteStore, config: crate::config::Config) -> io::Result<()> {
+pub fn run(store: SqliteStore, config: &crate::config::Config) -> io::Result<()> {
     tracing::info!("starting ChoreTUI");
     tui::run(UseCases::new(store, SystemClock), config)
 }
