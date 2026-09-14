@@ -1,6 +1,7 @@
 //! Application orchestration and semantic command dispatch.
 
 pub mod editor;
+pub mod kanban;
 pub mod use_cases;
 
 use std::{collections::HashSet, io};
