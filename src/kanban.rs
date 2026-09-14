@@ -2,8 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    env,
-    fmt,
+    env, fmt,
     io::{self, Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     str::FromStr,
@@ -14,9 +13,7 @@ use serde::{Deserialize, Deserializer, de};
 use thiserror::Error;
 
 use crate::{
-    app::kanban::{
-        KanbanGateway, KanbanImportOutcome, KanbanImportRequest, KanbanImportResult,
-    },
+    app::kanban::{KanbanGateway, KanbanImportOutcome, KanbanImportRequest, KanbanImportResult},
     config::KanbanConfig,
 };
 
@@ -62,9 +59,7 @@ impl FromStr for LoopbackEndpoint {
         {
             return Err(EndpointError);
         }
-        let address = authority
-            .parse::<SocketAddr>()
-            .map_err(|_| EndpointError)?;
+        let address = authority.parse::<SocketAddr>().map_err(|_| EndpointError)?;
         match address {
             SocketAddr::V4(address) if address.ip().is_loopback() && address.port() != 0 => {
                 Ok(Self(address))
@@ -234,10 +229,11 @@ impl KanbanClient {
     }
 
     fn token(&self) -> Result<String, KanbanClientError> {
-        let token =
-            env::var(self.token_environment.as_str()).map_err(|_| KanbanClientError::MissingToken {
+        let token = env::var(self.token_environment.as_str()).map_err(|_| {
+            KanbanClientError::MissingToken {
                 variable: self.token_environment.as_str().to_owned(),
-            })?;
+            }
+        })?;
         validate_token(&token)?;
         Ok(token)
     }
@@ -247,8 +243,8 @@ impl KanbanClient {
         if response.status != 200 {
             return Err(classify_error(response.status, &response.body)?);
         }
-        let health: HealthResponse =
-            serde_json::from_slice(&response.body).map_err(|_| KanbanClientError::MalformedResponse)?;
+        let health: HealthResponse = serde_json::from_slice(&response.body)
+            .map_err(|_| KanbanClientError::MalformedResponse)?;
         if health.status != "ok" {
             return Err(KanbanClientError::MalformedResponse);
         }
@@ -271,8 +267,8 @@ impl KanbanClient {
         if response.status != 200 {
             return Err(classify_error(response.status, &response.body)?);
         }
-        let wire: ImportResponse =
-            serde_json::from_slice(&response.body).map_err(|_| KanbanClientError::MalformedResponse)?;
+        let wire: ImportResponse = serde_json::from_slice(&response.body)
+            .map_err(|_| KanbanClientError::MalformedResponse)?;
         if wire.mode != "merge" {
             return Err(KanbanClientError::MalformedResponse);
         }
@@ -380,7 +376,10 @@ fn validate_idempotency_key(key: &str) -> Result<(), KanbanClientError> {
 }
 
 fn map_io_error(error: &io::Error, connecting: bool) -> KanbanClientError {
-    if matches!(error.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock) {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+    ) {
         KanbanClientError::Timeout
     } else if connecting {
         KanbanClientError::ConnectionFailed
@@ -404,9 +403,7 @@ fn parse_http_response(response: &[u8]) -> Result<HttpResponse, KanbanClientErro
     let headers =
         std::str::from_utf8(header_bytes).map_err(|_| KanbanClientError::MalformedResponse)?;
     let mut lines = headers.split("\r\n");
-    let status_line = lines
-        .next()
-        .ok_or(KanbanClientError::MalformedResponse)?;
+    let status_line = lines.next().ok_or(KanbanClientError::MalformedResponse)?;
     let mut status_parts = status_line.split_whitespace();
     let version = status_parts
         .next()
@@ -561,7 +558,8 @@ mod tests {
                     break;
                 }
                 request.extend_from_slice(&buffer[..count]);
-                let Some(separator) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                let Some(separator) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                else {
                     continue;
                 };
                 let headers = String::from_utf8_lossy(&request[..separator]);
@@ -612,9 +610,11 @@ mod tests {
 
     #[test]
     fn token_environment_names_are_bounded_to_portable_ascii_identifiers() {
-        assert!("KANBAN_TUI_API_TOKEN"
-            .parse::<TokenEnvironmentVariable>()
-            .is_ok());
+        assert!(
+            "KANBAN_TUI_API_TOKEN"
+                .parse::<TokenEnvironmentVariable>()
+                .is_ok()
+        );
         for invalid in ["", "9TOKEN", "TOKEN-NAME", "TOKEN NAME", "TÖKEN"] {
             assert!(
                 invalid.parse::<TokenEnvironmentVariable>().is_err(),
@@ -625,8 +625,10 @@ mod tests {
 
     #[test]
     fn request_debug_output_redacts_payload_and_retry_identity() {
-        let request =
-            KanbanImportRequest::new(b"{\"private\":\"Wash bedroom\"}".to_vec(), "secret-key".to_owned());
+        let request = KanbanImportRequest::new(
+            b"{\"private\":\"Wash bedroom\"}".to_vec(),
+            "secret-key".to_owned(),
+        );
         let debug = format!("{request:?}");
         assert!(!debug.contains("Wash bedroom"));
         assert!(!debug.contains("secret-key"));
@@ -640,7 +642,10 @@ mod tests {
         let response: &'static [u8] = Box::leak(response.into_boxed_slice());
         let (address, captured) = serve_once(response);
         let client = client_for(address);
-        let request = KanbanImportRequest::new(b"{\"format\":\"kanbanTUI-board\"}".to_vec(), "retry-1".to_owned());
+        let request = KanbanImportRequest::new(
+            b"{\"format\":\"kanbanTUI-board\"}".to_vec(),
+            "retry-1".to_owned(),
+        );
 
         let result = client
             .import_with_token(&request, "token-value")
@@ -719,7 +724,9 @@ mod tests {
     #[test]
     fn missing_runtime_token_names_only_the_environment_variable() {
         let client = KanbanClient {
-            endpoint: "http://127.0.0.1:8765".parse().expect("endpoint should parse"),
+            endpoint: "http://127.0.0.1:8765"
+                .parse()
+                .expect("endpoint should parse"),
             token_environment: "CHORETUI_TEST_TOKEN_THAT_IS_NOT_SET_41"
                 .parse()
                 .expect("name should parse"),
