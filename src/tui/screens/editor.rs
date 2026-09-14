@@ -310,6 +310,11 @@ impl EditorState {
             KeyCode::Enter if self.focus == EditorField::Cancel => return self.cancel(),
             KeyCode::Left | KeyCode::Up => self.change_choice(-1),
             KeyCode::Right | KeyCode::Down => self.change_choice(1),
+            KeyCode::Char(' ')
+                if matches!(self.focus, EditorField::Name | EditorField::Description) =>
+            {
+                self.type_character(' ');
+            }
             KeyCode::Char(' ') => self.toggle_choice(),
             KeyCode::Backspace => self.backspace(),
             KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -710,6 +715,40 @@ mod tests {
         };
         assert!(
             matches!(submission.pattern, SchedulePattern::Weekly { weekdays, .. } if weekdays == vec![IsoWeekday::Thursday])
+        );
+    }
+
+    #[test]
+    fn spaces_edit_text_fields_and_still_toggle_choice_fields() {
+        let mut state = EditorState::add(IsoWeekday::Monday);
+        for character in "Clean bathroom mirror".chars() {
+            state.handle_key(key(KeyCode::Char(character)));
+        }
+        state.focus = EditorField::Description;
+        for character in "Use a soft cloth".chars() {
+            state.handle_key(key(KeyCode::Char(character)));
+        }
+
+        state.focus = EditorField::Weekdays;
+        state.handle_key(key(KeyCode::Char(' ')));
+        assert!(state.values.weekdays.is_empty());
+        state.handle_key(key(KeyCode::Char(' ')));
+        assert_eq!(state.values.weekdays, BTreeSet::from([IsoWeekday::Monday]));
+
+        state.focus = EditorField::Enabled;
+        state.handle_key(key(KeyCode::Char(' ')));
+        assert!(!state.values.enabled);
+        state.handle_key(key(KeyCode::Char(' ')));
+        assert!(state.values.enabled);
+
+        state.focus = EditorField::Save;
+        let Some(EditorAction::Save(submission)) = state.handle_key(key(KeyCode::Enter)) else {
+            panic!("multi-word form should save")
+        };
+        assert_eq!(submission.name.as_str(), "Clean bathroom mirror");
+        assert_eq!(
+            submission.description.as_ref().map(Description::as_str),
+            Some("Use a soft cloth")
         );
     }
 

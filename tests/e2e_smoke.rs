@@ -76,7 +76,7 @@ fn catalog_selection_customization_and_provenance_survive_restart() {
 
     board.handle_key(key(KeyCode::Enter), BoardLayout::SevenColumns);
     assert!(board.editor().is_some());
-    send_text(&mut board, "-upstairs");
+    send_text(&mut board, " upstairs");
     board.handle_key(
         KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
         BoardLayout::SevenColumns,
@@ -93,7 +93,7 @@ fn catalog_selection_customization_and_provenance_survive_restart() {
             .state()
             .selected_occurrence()
             .map(|occurrence| occurrence.name().as_str()),
-        Some("Wipe bathroom fixtures-upstairs")
+        Some("Wipe bathroom fixtures upstairs")
     );
 
     let (application, _) = board.into_parts();
@@ -111,14 +111,14 @@ fn catalog_selection_customization_and_provenance_survive_restart() {
             .state()
             .selected_occurrence()
             .map(|occurrence| occurrence.name().as_str()),
-        Some("Wipe bathroom fixtures-upstairs")
+        Some("Wipe bathroom fixtures upstairs")
     );
     let (application, _) = restarted.into_parts();
     let planning = application
         .catalog_planning()
         .expect("planning data should load after restart");
     assert_eq!(planning.len(), 1);
-    assert_eq!(planning[0].name, "Wipe bathroom fixtures-upstairs");
+    assert_eq!(planning[0].name, "Wipe bathroom fixtures upstairs");
     assert_eq!(
         planning[0]
             .provenance

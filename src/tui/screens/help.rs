@@ -110,6 +110,7 @@ fn help_lines(context: HelpContext) -> Vec<&'static str> {
         HelpContext::Editor => vec![
             "Chore Editor:",
             "F2                browse the activity catalog while adding",
+            "Typing            edit name or description, including spaces",
             "Tab/BackTab       move field focus",
             "Arrows            change choices and values",
             "Space             toggle weekday or enabled state",
