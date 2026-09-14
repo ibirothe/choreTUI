@@ -14,8 +14,10 @@ use choretui::{
     tui::{
         BoardRuntime,
         model::{BoardInput, BoardLayout},
+        screens::catalog::PlanningStatus,
     },
 };
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tempfile::tempdir_in;
 
 #[derive(Clone, Copy)]
@@ -32,6 +34,98 @@ impl Clock for FixedClock {
     fn now(&self) -> Timestamp {
         self.now
     }
+}
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+fn send_text(board: &mut BoardRuntime<UseCases<SqliteStore, FixedClock>>, text: &str) {
+    for character in text.chars() {
+        board.handle_key(key(KeyCode::Char(character)), BoardLayout::SevenColumns);
+    }
+}
+
+#[test]
+fn catalog_selection_customization_and_provenance_survive_restart() {
+    let temporary = tempdir_in(std::env::current_dir().expect("working directory should exist"))
+        .expect("temporary data directory should be created");
+    let database = temporary.path().join("catalog-workflow.db");
+    let today = CalendarDate::new(2026, 9, 7).expect("date should be valid");
+    let clock = FixedClock {
+        today,
+        now: Timestamp::from_unix_timestamp(100).expect("timestamp should be valid"),
+    };
+    let mut board = BoardRuntime::new(UseCases::new(
+        SqliteStore::open(&database).expect("database should open"),
+        clock,
+    ));
+
+    board.handle_input(BoardInput::AddChore, BoardLayout::SevenColumns);
+    board.handle_key(key(KeyCode::F(2)), BoardLayout::SevenColumns);
+    board.handle_key(key(KeyCode::Char('/')), BoardLayout::SevenColumns);
+    send_text(&mut board, "wipe bathroom fixtures");
+    board.handle_key(key(KeyCode::Enter), BoardLayout::SevenColumns);
+    assert_eq!(
+        board
+            .catalog_browser()
+            .and_then(|catalog| catalog.selected_activity())
+            .map(|activity| activity.id.as_str()),
+        Some("bathroom.wipe_fixtures")
+    );
+
+    board.handle_key(key(KeyCode::Enter), BoardLayout::SevenColumns);
+    assert!(board.editor().is_some());
+    send_text(&mut board, "-upstairs");
+    board.handle_key(
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        BoardLayout::SevenColumns,
+    );
+    assert!(board.editor().is_none());
+    assert_eq!(
+        board
+            .catalog_browser()
+            .map(|catalog| catalog.planning_status("bathroom.wipe_fixtures")),
+        Some(PlanningStatus::Planned)
+    );
+    assert_eq!(
+        board
+            .state()
+            .selected_occurrence()
+            .map(|occurrence| occurrence.name().as_str()),
+        Some("Wipe bathroom fixtures-upstairs")
+    );
+
+    let (application, _) = board.into_parts();
+    let (store, _) = application.into_parts();
+    drop(store);
+    let restarted = BoardRuntime::new(UseCases::new(
+        SqliteStore::open(&database).expect("database should reopen"),
+        FixedClock {
+            today,
+            now: Timestamp::from_unix_timestamp(200).expect("timestamp should be valid"),
+        },
+    ));
+    assert_eq!(
+        restarted
+            .state()
+            .selected_occurrence()
+            .map(|occurrence| occurrence.name().as_str()),
+        Some("Wipe bathroom fixtures-upstairs")
+    );
+    let (application, _) = restarted.into_parts();
+    let planning = application
+        .catalog_planning()
+        .expect("planning data should load after restart");
+    assert_eq!(planning.len(), 1);
+    assert_eq!(planning[0].name, "Wipe bathroom fixtures-upstairs");
+    assert_eq!(
+        planning[0]
+            .provenance
+            .as_ref()
+            .map(|value| (value.template_id.as_str(), value.catalog_version)),
+        Some(("bathroom.wipe_fixtures", 2))
+    );
 }
 
 #[test]
