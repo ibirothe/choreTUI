@@ -82,9 +82,8 @@ personal household details do not.
 
 - Engineering validation found no correctness, accessibility, migration, or
   catalog-content blocker for catalog v2.
-- The E2E workflow found that Space cannot currently be entered in Name or
-  Description because the editor reserves it for choice toggles. The focused
-  fix is tracked in #35; the current E2E proves customization with a hyphenated
-  suffix until that bug is resolved.
+- The E2E workflow found that Space was reserved for choice toggles even in Name
+  and Description. #35 resolves this with field-aware input and regression
+  coverage; the E2E now customizes a template with a natural spaced qualifier.
 - Human discovery usefulness is not yet evidenced and must not be inferred from
   automated tests. The evaluation is tracked in #36.
