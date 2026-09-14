@@ -82,8 +82,6 @@ pub trait KanbanGateway {
     ///
     /// Returns a classified adapter error. Callers may safely retry with the
     /// same request and idempotency key after an uncertain transport result.
-    fn import_task(
-        &self,
-        request: &KanbanImportRequest,
-    ) -> Result<KanbanImportResult, Self::Error>;
+    fn import_task(&self, request: &KanbanImportRequest)
+    -> Result<KanbanImportResult, Self::Error>;
 }
