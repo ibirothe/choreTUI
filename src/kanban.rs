@@ -53,9 +53,9 @@ impl FromStr for LoopbackEndpoint {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let authority = value.strip_prefix("http://").ok_or(EndpointError)?;
         if authority.is_empty()
-            || authority
-                .chars()
-                .any(|character| matches!(character, '/' | '?' | '#' | '@') || character.is_whitespace())
+            || authority.chars().any(|character| {
+                matches!(character, '/' | '?' | '#' | '@') || character.is_whitespace()
+            })
         {
             return Err(EndpointError);
         }
