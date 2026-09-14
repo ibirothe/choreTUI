@@ -56,6 +56,9 @@ run the complete quality suite.
 
 ## Target-user evaluation protocol
 
+Use the facilitator script, anonymous worksheet, aggregate report, and privacy
+guardrails in [`catalog-user-evaluation.md`](catalog-user-evaluation.md).
+
 Human evaluation is intentionally separate from automated correctness. Recruit
 three to five people who use recurring planning to manage household work. Do
 not coach them toward a particular activity.
