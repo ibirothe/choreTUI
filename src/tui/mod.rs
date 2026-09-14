@@ -128,12 +128,12 @@ impl<A: BoardApplication> BoardRuntime<A> {
     /// usable empty board with persistent, actionable feedback.
     #[must_use]
     pub fn new(application: A) -> Self {
-        Self::new_with_config(application, crate::config::Config::default())
+        Self::new_with_config(application, &crate::config::Config::default())
     }
 
     /// Load the current week with explicit user-interface options.
     #[must_use]
-    pub fn new_with_config(mut application: A, config: crate::config::Config) -> Self {
+    pub fn new_with_config(mut application: A, config: &crate::config::Config) -> Self {
         let today = application.today();
         let week = IsoWeek::containing(today);
         let (state, status_persistent) = match application.load_week(week) {
@@ -759,7 +759,7 @@ pub fn restore_terminal() -> io::Result<()> {
 ///
 /// Returns an I/O error when terminal setup or rendering fails. Cleanup still
 /// runs through the lifecycle guard.
-pub fn run<A: BoardApplication>(application: A, config: crate::config::Config) -> io::Result<()> {
+pub fn run<A: BoardApplication>(application: A, config: &crate::config::Config) -> io::Result<()> {
     let _guard = TerminalGuard::enter(CrosstermControl)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut runtime = BoardRuntime::new_with_config(application, config);
