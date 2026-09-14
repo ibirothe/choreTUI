@@ -58,6 +58,13 @@ and dismissed items, and `R` to reset dismissals. Reasons are local,
 deterministic, and descriptive—there is no household score or automatic
 creation.
 
+The catalog is compiled into the binary and never requires a network request.
+Its version is stored only as provenance when a template is copied. The saved
+chore—including its customized name, description, and recurrence—remains an
+independent user record and is never rewritten by later catalog versions. See
+the [catalog validation record](docs/catalog-validation.md) for the release
+review checklist, tested failure paths, and target-user evaluation protocol.
+
 ## Configuration
 
 The optional `config.toml` supports:

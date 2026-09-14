@@ -203,4 +203,30 @@ mod tests {
         assert!(text.contains("Space"));
         assert!(text.contains("Global:"));
     }
+
+    #[test]
+    fn contextual_help_covers_every_catalog_and_guided_binding() {
+        let help = help_lines(HelpContext::Catalog).join("\n");
+        for binding in [
+            "k/Up, j/Down",
+            "Home/End",
+            "PageUp/PageDown",
+            "/",
+            "f or Tab",
+            "Tab/BackTab",
+            "h/l or Arrows",
+            "Space",
+            "c",
+            "p",
+            "Enter",
+            "1–5",
+            "x/v/R",
+            "Esc",
+            "AND across dimensions",
+            "OR within one dimension",
+            "Only Save creates a chore",
+        ] {
+            assert!(help.contains(binding), "missing catalog help for {binding}");
+        }
+    }
 }

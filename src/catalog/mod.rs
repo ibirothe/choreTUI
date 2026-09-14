@@ -780,6 +780,53 @@ mod tests {
     }
 
     #[test]
+    fn bundled_catalog_names_are_unique_and_excluded_domains_stay_absent() {
+        let catalog = ActivityCatalog::bundled().expect("bundled catalog should be valid");
+        let mut names = HashSet::new();
+        for activity in catalog.activities() {
+            assert!(
+                names.insert(activity.name.to_lowercase()),
+                "duplicate activity name: {}",
+                activity.name
+            );
+            let searchable = format!(
+                "{} {} {}",
+                activity.id,
+                activity.name,
+                activity.description.as_deref().unwrap_or_default()
+            )
+            .to_lowercase();
+            assert!(!searchable.contains("vehicle"));
+            assert!(!searchable.contains("personal administration"));
+        }
+    }
+
+    #[test]
+    fn bundled_catalog_has_meaningful_coverage_in_every_area_and_type() {
+        let catalog = ActivityCatalog::bundled().expect("bundled catalog should be valid");
+        for area in Area::ALL {
+            assert!(
+                catalog
+                    .activities()
+                    .filter(|activity| activity.areas.contains(&area))
+                    .count()
+                    >= 5,
+                "area {area:?} needs at least five discoverable activities"
+            );
+        }
+        for activity_type in ActivityType::ALL {
+            assert!(
+                catalog
+                    .activities()
+                    .filter(|activity| activity.activity_types.contains(&activity_type))
+                    .count()
+                    >= 5,
+                "type {activity_type:?} needs at least five discoverable activities"
+            );
+        }
+    }
+
+    #[test]
     fn bundled_catalog_exposes_provenance_and_immutable_lookup() {
         let catalog = ActivityCatalog::bundled().expect("bundled catalog should be valid");
         let provenance = catalog.provenance();
