@@ -4,10 +4,12 @@ use std::{
     collections::BTreeMap,
     env, fmt,
     io::{self, Read, Write},
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
+    net::{SocketAddr, SocketAddrV4, TcpStream},
     str::FromStr,
     time::Duration,
 };
+
+use std::fmt::Write as _;
 
 use serde::{Deserialize, Deserializer, de};
 use thiserror::Error;
@@ -316,10 +318,12 @@ impl KanbanClient {
         );
         if method == "POST" {
             request.push_str("Content-Type: application/json\r\n");
-            request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+            write!(&mut request, "Content-Length: {}\r\n", body.len())
+                .expect("writing to a string should not fail");
         }
         if let Some(key) = idempotency_key {
-            request.push_str(&format!("Idempotency-Key: {key}\r\n"));
+            write!(&mut request, "Idempotency-Key: {key}\r\n")
+                .expect("writing to a string should not fail");
         }
         request.push_str("\r\n");
 
@@ -523,7 +527,7 @@ fn classify_error(status: u16, body: &[u8]) -> Result<KanbanClientError, KanbanC
 mod tests {
     use std::{
         io::{Read, Write},
-        net::TcpListener,
+        net::{Ipv4Addr, TcpListener},
         sync::mpsc,
         thread,
     };
@@ -711,10 +715,10 @@ mod tests {
             validate_idempotency_key("bad key"),
             Err(KanbanClientError::InvalidIdempotencyKey)
         );
-        assert_eq!(
+        assert!(matches!(
             parse_http_response(b"not HTTP"),
             Err(KanbanClientError::MalformedResponse)
-        );
+        ));
         assert_eq!(
             map_io_error(&io::Error::from(io::ErrorKind::TimedOut), false),
             KanbanClientError::Timeout
