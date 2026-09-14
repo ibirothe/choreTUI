@@ -56,8 +56,9 @@ impl FromStr for LoopbackEndpoint {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let authority = value.strip_prefix("http://").ok_or(EndpointError)?;
         if authority.is_empty()
-            || authority.contains(['/', '?', '#', '@'])
-            || authority.chars().any(char::is_whitespace)
+            || authority
+                .chars()
+                .any(|character| matches!(character, '/' | '?' | '#' | '@') || character.is_whitespace())
         {
             return Err(EndpointError);
         }
@@ -479,8 +480,8 @@ struct ErrorEnvelope {
 #[serde(deny_unknown_fields)]
 struct ErrorBody {
     code: String,
-    #[serde(default)]
-    message: Option<String>,
+    #[serde(default, rename = "message")]
+    _message: Option<String>,
     #[serde(default)]
     rule: Option<String>,
     #[serde(default)]
@@ -489,16 +490,14 @@ struct ErrorBody {
     actual: Option<u64>,
     #[serde(default)]
     task_id: Option<u64>,
-    #[serde(default)]
-    request_id: Option<String>,
+    #[serde(default, rename = "request_id")]
+    _request_id: Option<String>,
 }
 
 fn classify_error(status: u16, body: &[u8]) -> Result<KanbanClientError, KanbanClientError> {
     let envelope: ErrorEnvelope =
         serde_json::from_slice(body).map_err(|_| KanbanClientError::MalformedResponse)?;
     let error = envelope.error;
-    let _bounded_message = error.message.as_deref().map(|message| &message[..message.len().min(400)]);
-    let _request_id = error.request_id;
     if error.code.is_empty() {
         return Err(KanbanClientError::MalformedResponse);
     }
