@@ -346,7 +346,10 @@ mod tests {
         .expect("fixture should write");
 
         let loaded = load(&path).expect("configuration should load");
-        let kanban = loaded.config.kanban.expect("integration should be configured");
+        let kanban = loaded
+            .config
+            .kanban
+            .expect("integration should be configured");
         assert_eq!(kanban.endpoint.to_string(), "http://127.0.0.1:8765");
         assert_eq!(kanban.token_env.as_str(), "MY_KANBAN_TOKEN");
 
