@@ -10,6 +10,8 @@ use directories::ProjectDirs;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::kanban::{LoopbackEndpoint, TokenEnvironmentVariable};
+
 /// Environment variable overriding the configuration file path.
 pub const CONFIG_ENV: &str = "CHORETUI_CONFIG";
 /// Environment variable overriding the application data directory.
@@ -181,7 +183,7 @@ pub enum DateFormat {
 }
 
 /// Typed user configuration with stable defaults.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
     /// Require confirmation before soft deletion.
@@ -190,6 +192,8 @@ pub struct Config {
     pub show_completed: bool,
     /// Secondary date-label presentation.
     pub date_format: DateFormat,
+    /// Optional kanbanTUI loopback integration. Missing means disabled.
+    pub kanban: Option<KanbanConfig>,
 }
 
 impl Default for Config {
@@ -198,8 +202,19 @@ impl Default for Config {
             confirm_delete: true,
             show_completed: true,
             date_format: DateFormat::Iso,
+            kanban: None,
         }
     }
+}
+
+/// Optional connection details for kanbanTUI's local API.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct KanbanConfig {
+    /// Numeric IPv4 loopback endpoint, including its nonzero port.
+    pub endpoint: LoopbackEndpoint,
+    /// Environment variable containing the bearer token.
+    #[serde(default)]
+    pub token_env: TokenEnvironmentVariable,
 }
 
 /// A successfully loaded configuration and its non-blocking warnings.
@@ -314,9 +329,39 @@ mod tests {
                 confirm_delete: false,
                 show_completed: false,
                 date_format: DateFormat::Locale,
+                kanban: None,
             }
         );
         assert_eq!(loaded.warnings, ["unknown configuration key `future_key`"]);
+    }
+
+    #[test]
+    fn kanban_configuration_is_optional_and_strictly_loopback() {
+        let directory = temporary_directory();
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[kanban]\nendpoint = \"http://127.0.0.1:8765\"\ntoken_env = \"MY_KANBAN_TOKEN\"\n",
+        )
+        .expect("fixture should write");
+
+        let loaded = load(&path).expect("configuration should load");
+        let kanban = loaded
+            .config
+            .kanban
+            .expect("integration should be configured");
+        assert_eq!(kanban.endpoint.to_string(), "http://127.0.0.1:8765");
+        assert_eq!(kanban.token_env.as_str(), "MY_KANBAN_TOKEN");
+
+        for invalid in [
+            "[kanban]\nendpoint = \"https://127.0.0.1:8765\"\n",
+            "[kanban]\nendpoint = \"http://localhost:8765\"\n",
+            "[kanban]\nendpoint = \"http://10.0.0.1:8765\"\n",
+            "[kanban]\nendpoint = \"http://127.0.0.1:8765\"\ntoken_env = \"BAD NAME\"\n",
+        ] {
+            fs::write(&path, invalid).expect("fixture should write");
+            assert!(load(&path).is_err(), "{invalid}");
+        }
     }
 
     #[test]

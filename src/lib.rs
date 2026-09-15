@@ -11,6 +11,7 @@ pub mod config;
 pub mod diagnostics;
 pub mod doctor;
 pub mod domain;
+pub mod kanban;
 pub mod recurrence;
 pub mod storage;
 pub mod tui;

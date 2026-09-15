@@ -62,5 +62,5 @@ fn run_interactive(paths: &AppPaths) -> Result<()> {
             paths.database_file().display()
         )
     })?;
-    choretui::app::run(store, loaded.config).context("interactive application failed")
+    choretui::app::run(store, &loaded.config).context("interactive application failed")
 }
