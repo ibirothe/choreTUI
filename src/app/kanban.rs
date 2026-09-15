@@ -118,8 +118,8 @@ pub fn map_occurrence_to_kanban(
 }
 
 fn source_task_id(occurrence: &Occurrence) -> u64 {
-    let uuid = occurrence.id().as_uuid().as_u128();
-    let folded = (uuid >> 64) as u64 ^ uuid as u64;
+    let (high, low) = occurrence.id().as_uuid().as_u64_pair();
+    let folded = high ^ low;
     folded.max(1)
 }
 
