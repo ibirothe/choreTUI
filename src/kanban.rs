@@ -341,6 +341,9 @@ impl KanbanClient {
             .take((MAX_RESPONSE_BYTES + 1) as u64)
             .read_to_end(&mut response)
             .map_err(|error| map_io_error(&error, false))?;
+        if response.is_empty() {
+            return Err(KanbanClientError::TransportFailure);
+        }
         if response.len() > MAX_RESPONSE_BYTES {
             return Err(KanbanClientError::ResponseTooLarge);
         }
@@ -550,6 +553,7 @@ fn classify_error(status: u16, body: &[u8]) -> Result<KanbanClientError, KanbanC
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::{BTreeSet, HashMap},
         io::{Read, Write},
         net::{Ipv4Addr, TcpListener},
         sync::mpsc,
@@ -557,6 +561,13 @@ mod tests {
     };
 
     use super::*;
+    use crate::{
+        app::kanban::{KanbanDestinationScope, KanbanTaskExportOutcome, export_day_to_kanban},
+        domain::{
+            CalendarDate, ChoreId, ChoreName, Occurrence, OccurrenceId, OccurrenceSeed,
+            OccurrenceState, ScheduleId, Timestamp,
+        },
+    };
 
     fn client_for(address: SocketAddrV4) -> KanbanClient {
         KanbanClient {
@@ -575,39 +586,43 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("request should connect");
-            stream
-                .set_read_timeout(Some(Duration::from_millis(500)))
-                .expect("timeout should configure");
-            let mut request = Vec::new();
-            let mut buffer = [0_u8; 1024];
-            loop {
-                let count = stream.read(&mut buffer).expect("request should read");
-                if count == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..count]);
-                let Some(separator) = request.windows(4).position(|part| part == b"\r\n\r\n")
-                else {
-                    continue;
-                };
-                let headers = String::from_utf8_lossy(&request[..separator]);
-                let length = headers
-                    .lines()
-                    .find_map(|line| {
-                        line.split_once(':').and_then(|(name, value)| {
-                            name.eq_ignore_ascii_case("content-length")
-                                .then(|| value.trim().parse::<usize>().expect("valid length"))
-                        })
-                    })
-                    .unwrap_or(0);
-                if request.len() >= separator + 4 + length {
-                    break;
-                }
-            }
-            sender.send(request).expect("request should be captured");
+            let request = read_request(&mut stream);
+            let _ = sender.send(request);
             stream.write_all(response).expect("response should write");
         });
         (address, receiver)
+    }
+
+    fn read_request(stream: &mut TcpStream) -> Vec<u8> {
+        stream
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .expect("timeout should configure");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let count = stream.read(&mut buffer).expect("request should read");
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..count]);
+            let Some(separator) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..separator]);
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':').and_then(|(name, value)| {
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().expect("valid length"))
+                    })
+                })
+                .unwrap_or(0);
+            if request.len() >= separator + 4 + length {
+                break;
+            }
+        }
+        request
     }
 
     fn json_response(status: &str, body: &str) -> Vec<u8> {
@@ -806,6 +821,271 @@ mod tests {
             map_io_error(&io::Error::from(io::ErrorKind::TimedOut), false),
             KanbanClientError::Timeout
         );
+    }
+
+    #[test]
+    fn transport_and_contract_failures_cover_recovery_categories() {
+        let request = KanbanImportRequest::new(b"{}".to_vec(), "recovery-test".to_owned());
+        let cases = [
+            (
+                "401 Unauthorized",
+                r#"{"error":{"code":"unauthorized"}}"#,
+                KanbanClientError::Unauthorized,
+            ),
+            (
+                "409 Conflict",
+                r#"{"error":{"code":"idempotency_conflict"}}"#,
+                KanbanClientError::IdempotencyConflict,
+            ),
+            (
+                "422 Unprocessable Entity",
+                r#"{"error":{"code":"policy_violation","rule":"task_text_limit"}}"#,
+                KanbanClientError::PolicyViolation {
+                    rule: "task_text_limit".to_owned(),
+                    limit: None,
+                    actual: None,
+                    task_id: None,
+                },
+            ),
+            (
+                "503 Service Unavailable",
+                r#"{"error":{"code":"store_unavailable"}}"#,
+                KanbanClientError::StoreUnavailable,
+            ),
+        ];
+        for (status, body, expected) in cases {
+            let response = Box::leak(json_response(status, body).into_boxed_slice());
+            let (address, _) = serve_once(response);
+            assert_eq!(
+                client_for(address).import_with_token(&request, "token-value"),
+                Err(expected)
+            );
+        }
+
+        let malformed = Box::leak(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1\r\n\r\n{"
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        let (address, _) = serve_once(malformed);
+        assert_eq!(
+            client_for(address).import_with_token(&request, "token-value"),
+            Err(KanbanClientError::MalformedResponse)
+        );
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("listener should bind");
+        let address = match listener.local_addr().expect("address should resolve") {
+            SocketAddr::V4(address) => address,
+            SocketAddr::V6(_) => unreachable!("test listener is IPv4"),
+        };
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request should connect");
+            let _ = read_request(&mut stream);
+        });
+        assert_eq!(
+            client_for(address).import_with_token(&request, "token-value"),
+            Err(KanbanClientError::TransportFailure)
+        );
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("listener should bind");
+        let address = match listener.local_addr().expect("address should resolve") {
+            SocketAddr::V4(address) => address,
+            SocketAddr::V6(_) => unreachable!("test listener is IPv4"),
+        };
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request should connect");
+            let _ = read_request(&mut stream);
+            thread::sleep(Duration::from_millis(100));
+        });
+        let mut client = client_for(address);
+        client.timeout = Duration::from_millis(20);
+        assert_eq!(
+            client.import_with_token(&request, "token-value"),
+            Err(KanbanClientError::Timeout)
+        );
+
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("listener should bind");
+        let unavailable = match listener.local_addr().expect("address should resolve") {
+            SocketAddr::V4(address) => address,
+            SocketAddr::V6(_) => unreachable!("test listener is IPv4"),
+        };
+        drop(listener);
+        assert_eq!(
+            client_for(unavailable).import_with_token(&request, "token-value"),
+            Err(KanbanClientError::ConnectionFailed)
+        );
+    }
+
+    struct ContractGateway(KanbanClient);
+
+    impl KanbanGateway for ContractGateway {
+        type Error = KanbanClientError;
+
+        fn health(&self) -> Result<(), Self::Error> {
+            self.0.health_with_token("contract-token")
+        }
+
+        fn import_task(
+            &self,
+            request: &KanbanImportRequest,
+        ) -> Result<KanbanImportResult, Self::Error> {
+            self.0.import_with_token(request, "contract-token")
+        }
+
+        fn classify_import_error(error: &Self::Error) -> KanbanGatewayFailure {
+            <KanbanClient as KanbanGateway>::classify_import_error(error)
+        }
+    }
+
+    fn contract_occurrence(date: CalendarDate, name: &str, state: OccurrenceState) -> Occurrence {
+        let created = Timestamp::from_unix_timestamp(1).expect("timestamp should be valid");
+        Occurrence::restore(
+            OccurrenceSeed {
+                id: OccurrenceId::new(),
+                chore_id: ChoreId::new(),
+                schedule_id: ScheduleId::new(),
+                nominal_date: date,
+                due_date: date,
+                name: ChoreName::new(name).expect("name should be valid"),
+                description: None,
+                created_at: created,
+            },
+            state,
+            created,
+        )
+    }
+
+    type ContractCapture = (Vec<String>, Vec<String>, usize);
+
+    fn serve_contract() -> (SocketAddrV4, mpsc::Receiver<ContractCapture>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("listener should bind");
+        let address = match listener.local_addr().expect("address should resolve") {
+            SocketAddr::V4(address) => address,
+            SocketAddr::V6(_) => unreachable!("test listener is IPv4"),
+        };
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || run_contract_server(&listener, &sender));
+        (address, receiver)
+    }
+
+    fn run_contract_server(listener: &TcpListener, sender: &mpsc::Sender<ContractCapture>) {
+        let mut accepted_keys = BTreeSet::new();
+        let mut calls_by_name = HashMap::<String, usize>::new();
+        let mut ordered_names = Vec::new();
+        let mut ordered_keys = Vec::new();
+        let mut mutations = 0;
+        for _ in 0..6 {
+            let (mut stream, _) = listener.accept().expect("request should connect");
+            let request = read_request(&mut stream);
+            let separator = request
+                .windows(4)
+                .position(|part| part == b"\r\n\r\n")
+                .expect("request should have headers");
+            let headers =
+                String::from_utf8(request[..separator].to_vec()).expect("headers should be UTF-8");
+            assert!(headers.starts_with("POST /v1/board/import?mode=merge HTTP/1.1\r\n"));
+            assert!(headers.contains("\r\nAuthorization: Bearer contract-token\r\n"));
+            assert!(headers.contains("\r\nContent-Type: application/json\r\n"));
+            let key = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("Idempotency-Key: "))
+                .expect("idempotency key should be present")
+                .to_owned();
+            let body: serde_json::Value = serde_json::from_slice(&request[separator + 4..])
+                .expect("payload should be valid JSON");
+            assert_eq!(body["format"], "kanbanTUI-board");
+            assert_eq!(body["version"], 1);
+            assert_eq!(body["active"].as_array().map(Vec::len), Some(1));
+            assert_eq!(body["archived"].as_array().map(Vec::len), Some(0));
+            let name = body["active"][0]["text"]
+                .as_str()
+                .expect("task text should be present")
+                .to_owned();
+            ordered_names.push(name.clone());
+            ordered_keys.push(key.clone());
+            let call = calls_by_name.entry(name.clone()).or_default();
+            *call += 1;
+
+            if name == "Blocked by policy" {
+                let response = json_response(
+                    "422 Unprocessable Entity",
+                    r#"{"error":{"code":"policy_violation","rule":"task_text_limit"}}"#,
+                );
+                stream.write_all(&response).expect("response should write");
+                continue;
+            }
+            let changed = accepted_keys.insert(key);
+            mutations += usize::from(changed);
+            if name == "Uncertain delivery" && *call == 1 {
+                continue;
+            }
+            let outcome = if changed { "changed" } else { "unchanged" };
+            let response = json_response(
+                "200 OK",
+                &format!(r#"{{"outcome":"{outcome}","mode":"merge","id_mapping":{{}}}}"#),
+            );
+            stream.write_all(&response).expect("response should write");
+        }
+        sender
+            .send((ordered_names, ordered_keys, mutations))
+            .expect("capture should send");
+    }
+
+    #[test]
+    fn selected_day_workflow_matches_v1_contract_and_retries_without_duplicates() {
+        let (address, capture_receiver) = serve_contract();
+
+        let date = CalendarDate::new(2026, 9, 19).expect("date should be valid");
+        let completed_at = Timestamp::from_unix_timestamp(2).expect("timestamp should be valid");
+        let occurrences = vec![
+            contract_occurrence(date, "Laundry", OccurrenceState::Pending),
+            contract_occurrence(date, "Blocked by policy", OccurrenceState::Pending),
+            contract_occurrence(date, "Uncertain delivery", OccurrenceState::Pending),
+            contract_occurrence(
+                date,
+                "Already done",
+                OccurrenceState::Completed { at: completed_at },
+            ),
+        ];
+        let gateway = ContractGateway(client_for(address));
+        let scope = KanbanDestinationScope::new(address.to_string())
+            .expect("destination scope should be valid");
+
+        let first = export_day_to_kanban(&gateway, &scope, date, &occurrences);
+        assert_eq!(first.summary().changed, 1);
+        assert_eq!(first.summary().skipped, 1);
+        assert_eq!(first.summary().failed, 2);
+        assert!(matches!(
+            first.tasks[1].outcome,
+            KanbanTaskExportOutcome::Failed(_)
+        ));
+        assert!(matches!(
+            first.tasks[2].outcome,
+            KanbanTaskExportOutcome::Failed(_)
+        ));
+
+        let retry = export_day_to_kanban(&gateway, &scope, date, &occurrences);
+        assert_eq!(retry.summary().changed, 0);
+        assert_eq!(retry.summary().unchanged, 2);
+        assert_eq!(retry.summary().skipped, 1);
+        assert_eq!(retry.summary().failed, 1);
+
+        let (names, keys, mutations) = capture_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("contract server should finish");
+        assert_eq!(
+            names,
+            [
+                "Laundry",
+                "Blocked by policy",
+                "Uncertain delivery",
+                "Laundry",
+                "Blocked by policy",
+                "Uncertain delivery",
+            ]
+        );
+        assert_eq!(keys[..3], keys[3..]);
+        assert_eq!(mutations, 2, "retry must not duplicate accepted tasks");
     }
 
     #[test]
