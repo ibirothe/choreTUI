@@ -3,7 +3,9 @@
 use std::{fmt, fs, path::Path};
 
 use crate::{
-    config::{self, AppPaths},
+    app::kanban::KanbanGateway,
+    config::{self, AppPaths, KanbanConfig},
+    kanban::KanbanClient,
     storage::{LATEST_VERSION, SqliteStore},
 };
 
@@ -67,7 +69,10 @@ impl DoctorReport {
             paths.state_dir(),
             "directory does not exist yet; startup will create it",
         );
-        report.check_configuration(paths.config_file());
+        let kanban = report.check_configuration(paths.config_file());
+        if let Some(config) = kanban {
+            report.check_kanban(&config);
+        }
         report.check_database(paths.database_file());
         report
     }
@@ -108,9 +113,10 @@ impl DoctorReport {
         });
     }
 
-    fn check_configuration(&mut self, path: &Path) {
+    fn check_configuration(&mut self, path: &Path) -> Option<KanbanConfig> {
         match config::load(path) {
             Ok(loaded) => {
+                let kanban = loaded.config.kanban.clone();
                 self.checks.push(DoctorCheck {
                     name: "configuration",
                     status: CheckStatus::Pass,
@@ -126,11 +132,36 @@ impl DoctorReport {
                         status: CheckStatus::Warning,
                         detail: warning,
                     }));
+                kanban
             }
+            Err(error) => {
+                self.checks.push(DoctorCheck {
+                    name: "configuration",
+                    status: CheckStatus::Fail,
+                    detail: format!("{error}; fix the file and run `chore doctor` again"),
+                });
+                None
+            }
+        }
+    }
+
+    fn check_kanban(&mut self, config: &KanbanConfig) {
+        let client = KanbanClient::new(config);
+        match client.health() {
+            Ok(()) => self.checks.push(DoctorCheck {
+                name: "kanbanTUI",
+                status: CheckStatus::Pass,
+                detail: format!(
+                    "{} is healthy; checked GET /health only (no import performed)",
+                    config.endpoint
+                ),
+            }),
             Err(error) => self.checks.push(DoctorCheck {
-                name: "configuration",
+                name: "kanbanTUI",
                 status: CheckStatus::Fail,
-                detail: format!("{error}; fix the file and run `chore doctor` again"),
+                detail: format!(
+                    "{error}; start kanbanTUI for the intended board, verify token_env, and retry"
+                ),
             }),
         }
     }
