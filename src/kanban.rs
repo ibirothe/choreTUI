@@ -407,13 +407,13 @@ fn validate_idempotency_key(key: &str) -> Result<(), KanbanClientError> {
 }
 
 fn map_io_error(error: &io::Error, connecting: bool) -> KanbanClientError {
-    if matches!(
+    if connecting {
+        KanbanClientError::ConnectionFailed
+    } else if matches!(
         error.kind(),
         io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
     ) {
         KanbanClientError::Timeout
-    } else if connecting {
-        KanbanClientError::ConnectionFailed
     } else {
         KanbanClientError::TransportFailure
     }
