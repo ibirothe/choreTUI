@@ -5,3 +5,4 @@ pub mod catalog;
 pub mod chore_list;
 pub mod editor;
 pub mod help;
+pub mod kanban_export;

@@ -51,6 +51,7 @@ pub enum BoardInput {
     DeleteChore,
     OpenChoreList,
     OpenGuidedPlanning,
+    ExportSelectedDay,
     PreviousWeek,
     NextWeek,
     CurrentWeek,
@@ -68,6 +69,7 @@ pub enum BoardCommand {
     DeleteChore(ChoreId),
     OpenChoreList,
     OpenGuidedPlanning,
+    ExportSelectedDay(CalendarDate),
     LoadWeek(IsoWeek),
     Help,
     Quit,
@@ -91,6 +93,7 @@ pub const fn input_for_key(key: KeyEvent) -> Option<BoardInput> {
         KeyCode::Char('D') => Some(BoardInput::DeleteChore),
         KeyCode::Char('c') => Some(BoardInput::OpenChoreList),
         KeyCode::Char('g') => Some(BoardInput::OpenGuidedPlanning),
+        KeyCode::Char('x') => Some(BoardInput::ExportSelectedDay),
         KeyCode::Char('[') | KeyCode::PageUp => Some(BoardInput::PreviousWeek),
         KeyCode::Char(']') | KeyCode::PageDown => Some(BoardInput::NextWeek),
         KeyCode::Char('t') => Some(BoardInput::CurrentWeek),
@@ -201,6 +204,12 @@ impl BoardState {
             .and_then(|position| self.occurrences_for_day(self.selected_day).nth(position))
     }
 
+    /// Return the already-materialized weekly snapshot without changing it.
+    #[must_use]
+    pub fn occurrences(&self) -> &[Occurrence] {
+        &self.occurrences
+    }
+
     #[must_use]
     pub fn statistics(&self) -> WeeklyStatistics {
         WeeklyStatistics::calculate(self.week, &self.occurrences, self.today)
@@ -288,6 +297,11 @@ impl BoardState {
             BoardInput::OpenChoreList => return Ok(Some(BoardCommand::OpenChoreList)),
             BoardInput::OpenGuidedPlanning => {
                 return Ok(Some(BoardCommand::OpenGuidedPlanning));
+            }
+            BoardInput::ExportSelectedDay => {
+                return Ok(Some(BoardCommand::ExportSelectedDay(
+                    self.day_date(self.selected_day),
+                )));
             }
             BoardInput::PreviousWeek => {
                 return self.week.previous().map(BoardCommand::LoadWeek).map(Some);
@@ -460,6 +474,10 @@ mod tests {
             input_for_key(key(KeyCode::Char('g'))),
             Some(BoardInput::OpenGuidedPlanning)
         );
+        assert_eq!(
+            input_for_key(key(KeyCode::Char('x'))),
+            Some(BoardInput::ExportSelectedDay)
+        );
     }
 
     #[test]
@@ -594,6 +612,12 @@ mod tests {
                 .handle_input(BoardInput::EditChore, BoardLayout::SevenColumns)
                 .unwrap(),
             Some(BoardCommand::EditChore(chore_id))
+        );
+        assert_eq!(
+            state
+                .handle_input(BoardInput::ExportSelectedDay, BoardLayout::SevenColumns)
+                .unwrap(),
+            Some(BoardCommand::ExportSelectedDay(monday))
         );
         assert_eq!(
             state

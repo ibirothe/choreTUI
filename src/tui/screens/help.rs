@@ -100,6 +100,7 @@ fn help_lines(context: HelpContext) -> Vec<&'static str> {
             "Space             toggle completion",
             "a                 add chore for selected weekday",
             "g                 what might I be overlooking?",
+            "x                 export the selected day to kanbanTUI",
             "e                 edit selected chore",
             "d / D             disable / soft-delete chore",
             "c                 open Chore List",

@@ -24,9 +24,13 @@ use self::{
     screens::chore_list::{ChoreListAction, ChoreListState},
     screens::editor::{EditorAction, EditorState},
     screens::help::{HelpContext, HelpState},
+    screens::kanban_export::{KanbanExportAction, KanbanExportState},
 };
 use crate::{
-    app::editor::{CatalogPlanningChore, ChoreSubmission, EditorRecord},
+    app::{
+        editor::{CatalogPlanningChore, ChoreSubmission, EditorRecord},
+        kanban::KanbanDayExportReport,
+    },
     domain::{CalendarDate, Chore, ChoreId, IsoWeek, Occurrence, OccurrenceId, OccurrenceState},
 };
 
@@ -108,6 +112,20 @@ pub trait BoardApplication {
     ///
     /// Returns an application error when the transaction fails.
     fn delete_chore(&mut self, id: ChoreId) -> Result<(), Self::Error>;
+
+    /// Return a non-secret label when the optional kanbanTUI export is enabled.
+    fn kanban_destination_label(&self) -> Option<String> {
+        None
+    }
+
+    /// Export the supplied materialized snapshot to the configured destination.
+    fn export_selected_day(
+        &mut self,
+        _date: CalendarDate,
+        _occurrences: &[Occurrence],
+    ) -> Option<KanbanDayExportReport> {
+        None
+    }
 }
 
 /// Deterministic bridge between board commands and application operations.
@@ -119,6 +137,7 @@ pub struct BoardRuntime<A> {
     catalog_origin_editor: Option<EditorState>,
     chore_list: Option<ChoreListState>,
     help: Option<HelpState>,
+    kanban_export: Option<KanbanExportState>,
     confirm_delete: bool,
     status_persistent: bool,
 }
@@ -155,6 +174,7 @@ impl<A: BoardApplication> BoardRuntime<A> {
             catalog_origin_editor: None,
             chore_list: None,
             help: None,
+            kanban_export: None,
             confirm_delete: config.confirm_delete,
             status_persistent,
         }
@@ -197,8 +217,21 @@ impl<A: BoardApplication> BoardRuntime<A> {
         self.help.as_ref()
     }
 
+    #[must_use]
+    pub const fn kanban_export(&self) -> Option<&KanbanExportState> {
+        self.kanban_export.as_ref()
+    }
+
     /// Route a raw key to the active editor or the Weekly Board.
     pub fn handle_key(&mut self, key: KeyEvent, layout: BoardLayout) -> bool {
+        if let Some(export) = self.kanban_export.as_mut() {
+            match export.handle_key(key) {
+                Some(KanbanExportAction::Confirm) => self.confirm_kanban_export(),
+                Some(KanbanExportAction::Close) => self.kanban_export = None,
+                None => {}
+            }
+            return false;
+        }
         if let Some(help) = self.help.as_mut() {
             if help.handle_key(key, 12) {
                 self.help = None;
@@ -318,6 +351,10 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 self.open_guided_catalog();
                 false
             }
+            Some(BoardCommand::ExportSelectedDay(date)) => {
+                self.open_kanban_export(date);
+                false
+            }
             Some(BoardCommand::Help) => {
                 self.help = Some(HelpState::new(HelpContext::Board));
                 self.status_persistent = false;
@@ -344,6 +381,55 @@ impl<A: BoardApplication> BoardRuntime<A> {
                 self.state.set_status(Some(load_error_message()));
                 self.status_persistent = true;
             }
+        }
+    }
+
+    fn open_kanban_export(&mut self, date: CalendarDate) {
+        let Some(destination) = self.application.kanban_destination_label() else {
+            self.state.set_status(Some(
+                "Export disabled: configure [kanban] endpoint and token_env first.".to_owned(),
+            ));
+            self.status_persistent = false;
+            return;
+        };
+        let mut eligible = 0;
+        let mut excluded = 0;
+        for occurrence in self
+            .state
+            .occurrences()
+            .iter()
+            .filter(|occurrence| occurrence.due_date() == date)
+        {
+            if occurrence.state() == OccurrenceState::Pending {
+                eligible += 1;
+            } else {
+                excluded += 1;
+            }
+        }
+        self.kanban_export = Some(KanbanExportState::confirmation(
+            date,
+            destination,
+            eligible,
+            excluded,
+        ));
+    }
+
+    fn confirm_kanban_export(&mut self) {
+        let Some(date) = self.kanban_export.as_ref().map(KanbanExportState::date) else {
+            return;
+        };
+        let snapshot = self.state.occurrences().to_vec();
+        let Some(report) = self.application.export_selected_day(date, &snapshot) else {
+            self.kanban_export = None;
+            self.state.set_status(Some(
+                "Export disabled: integration is no longer available; check configuration."
+                    .to_owned(),
+            ));
+            self.status_persistent = true;
+            return;
+        };
+        if let Some(export) = self.kanban_export.as_mut() {
+            export.set_report(report);
         }
     }
 
@@ -766,7 +852,9 @@ pub fn run<A: BoardApplication>(application: A, config: &crate::config::Config) 
 
     loop {
         terminal.draw(|frame| {
-            if let Some(help) = runtime.help() {
+            if let Some(export) = runtime.kanban_export() {
+                screens::kanban_export::render(frame, frame.area(), export);
+            } else if let Some(help) = runtime.help() {
                 screens::help::render(frame, frame.area(), help);
             } else if let Some(editor) = runtime.editor() {
                 screens::editor::render(frame, frame.area(), editor);
@@ -805,9 +893,14 @@ mod tests {
 
     use crossterm::event::{KeyCode, KeyEvent};
 
-    use super::{BoardApplication, BoardRuntime, TerminalControl, TerminalGuard};
+    use super::{
+        BoardApplication, BoardRuntime, KanbanExportState, TerminalControl, TerminalGuard,
+    };
     use crate::{
-        app::editor::{CatalogPlanningChore, ChoreSubmission, EditorRecord},
+        app::{
+            editor::{CatalogPlanningChore, ChoreSubmission, EditorRecord},
+            kanban::{KanbanDayExportReport, KanbanTaskExportOutcome, KanbanTaskExportResult},
+        },
         domain::{
             CalendarDate, Chore, ChoreId, ChoreName, IsoWeek, Occurrence, OccurrenceId,
             OccurrenceSeed, OccurrenceState, ScheduleId, Timestamp,
@@ -835,6 +928,8 @@ mod tests {
         fail_toggle: bool,
         fail_load: bool,
         dismissals: HashSet<String>,
+        kanban_enabled: bool,
+        export_dates: Vec<CalendarDate>,
     }
 
     impl BoardApplication for FakeApplication {
@@ -912,6 +1007,34 @@ mod tests {
 
         fn delete_chore(&mut self, _id: ChoreId) -> Result<(), Self::Error> {
             Err(FakeError)
+        }
+
+        fn kanban_destination_label(&self) -> Option<String> {
+            self.kanban_enabled
+                .then(|| "http://127.0.0.1:8765".to_owned())
+        }
+
+        fn export_selected_day(
+            &mut self,
+            date: CalendarDate,
+            occurrences: &[Occurrence],
+        ) -> Option<KanbanDayExportReport> {
+            if !self.kanban_enabled {
+                return None;
+            }
+            self.export_dates.push(date);
+            Some(KanbanDayExportReport {
+                date,
+                tasks: occurrences
+                    .iter()
+                    .filter(|occurrence| occurrence.due_date() == date)
+                    .map(|occurrence| KanbanTaskExportResult {
+                        occurrence_id: occurrence.id(),
+                        name: occurrence.name().as_str().to_owned(),
+                        outcome: KanbanTaskExportOutcome::Changed,
+                    })
+                    .collect(),
+            })
         }
     }
 
@@ -994,6 +1117,8 @@ mod tests {
             fail_toggle: false,
             fail_load: false,
             dismissals: HashSet::new(),
+            kanban_enabled: false,
+            export_dates: Vec::new(),
         };
         let mut runtime = BoardRuntime::new(application);
 
@@ -1023,6 +1148,8 @@ mod tests {
             fail_toggle: false,
             fail_load: false,
             dismissals: HashSet::new(),
+            kanban_enabled: false,
+            export_dates: Vec::new(),
         };
         let mut runtime = BoardRuntime::new(application);
 
@@ -1061,6 +1188,8 @@ mod tests {
             fail_toggle: false,
             fail_load: false,
             dismissals: HashSet::new(),
+            kanban_enabled: false,
+            export_dates: Vec::new(),
         };
         let mut runtime = BoardRuntime::new(application);
 
@@ -1109,6 +1238,8 @@ mod tests {
             fail_toggle: true,
             fail_load: false,
             dismissals: HashSet::new(),
+            kanban_enabled: false,
+            export_dates: Vec::new(),
         };
         let mut runtime = BoardRuntime::new(application);
 
@@ -1137,6 +1268,8 @@ mod tests {
             fail_toggle: false,
             fail_load: false,
             dismissals: HashSet::new(),
+            kanban_enabled: false,
+            export_dates: Vec::new(),
         };
         let mut runtime = BoardRuntime::new(application);
         let old_week = runtime.state().week();
@@ -1155,6 +1288,85 @@ mod tests {
                 .state()
                 .status()
                 .is_some_and(|message| message.contains("current board kept"))
+        );
+    }
+
+    #[test]
+    fn export_uses_selected_date_requires_confirmation_and_preserves_board() {
+        let monday = date(2026, 9, 7);
+        let tuesday = date(2026, 9, 8);
+        let monday_item = occurrence(monday);
+        let tuesday_item = occurrence(tuesday);
+        let tuesday_id = tuesday_item.id();
+        let application = FakeApplication {
+            today: monday,
+            occurrences: vec![monday_item, tuesday_item],
+            fail_toggle: false,
+            fail_load: false,
+            dismissals: HashSet::new(),
+            kanban_enabled: true,
+            export_dates: Vec::new(),
+        };
+        let mut runtime = BoardRuntime::new(application);
+        runtime.handle_input(BoardInput::NextDay, BoardLayout::SevenColumns);
+        assert_eq!(runtime.state().selected_day(), 1);
+
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char('x')),
+            BoardLayout::SevenColumns,
+        );
+        assert_eq!(
+            runtime.kanban_export().map(KanbanExportState::date),
+            Some(tuesday)
+        );
+        runtime.handle_key(KeyEvent::from(KeyCode::Esc), BoardLayout::SevenColumns);
+        assert!(runtime.application.export_dates.is_empty());
+
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char('x')),
+            BoardLayout::SevenColumns,
+        );
+        runtime.handle_key(
+            KeyEvent::from(KeyCode::Char('y')),
+            BoardLayout::SevenColumns,
+        );
+        assert_eq!(runtime.application.export_dates, [tuesday]);
+        assert!(
+            runtime
+                .kanban_export()
+                .and_then(KanbanExportState::report)
+                .is_some()
+        );
+        assert_eq!(runtime.state().selected_day(), 1);
+        assert_eq!(
+            runtime.state().selected_occurrence().map(Occurrence::id),
+            Some(tuesday_id)
+        );
+    }
+
+    #[test]
+    fn unconfigured_export_is_contextual_and_sends_nothing() {
+        let monday = date(2026, 9, 7);
+        let application = FakeApplication {
+            today: monday,
+            occurrences: vec![occurrence(monday)],
+            fail_toggle: false,
+            fail_load: false,
+            dismissals: HashSet::new(),
+            kanban_enabled: false,
+            export_dates: Vec::new(),
+        };
+        let mut runtime = BoardRuntime::new(application);
+
+        runtime.handle_input(BoardInput::ExportSelectedDay, BoardLayout::SevenColumns);
+
+        assert!(runtime.kanban_export().is_none());
+        assert!(runtime.application.export_dates.is_empty());
+        assert!(
+            runtime
+                .state()
+                .status()
+                .is_some_and(|status| status.contains("Export disabled"))
         );
     }
 }
