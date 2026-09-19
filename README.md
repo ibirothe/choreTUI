@@ -33,6 +33,7 @@ The Weekly Board is the startup screen. Press `?` for contextual, scrollable hel
 | `Space` | Toggle pending/completed |
 | `a` / `e` | Add / edit a chore |
 | `g` | Guided “What might I be overlooking?” planning |
+| `x` | Export the selected day to configured kanbanTUI |
 | `d` / `D` | Disable / soft-delete a chore |
 | `c` | Open the Chore List |
 | `[` / `]`, `PageUp` / `PageDown` | Previous / next ISO week |
@@ -73,7 +74,15 @@ The optional `config.toml` supports:
 confirm_delete = true
 show_completed = true
 date_format = "iso"
+
+[kanban]
+endpoint = "http://127.0.0.1:8765"
+token_env = "KANBAN_TUI_API_TOKEN"
 ```
+
+Omit `[kanban]` to keep ChoreTUI fully offline. The endpoint must be an explicit
+numeric IPv4 loopback HTTP address. `token_env` names an environment variable;
+the token value is never stored in TOML, SQLite, diagnostics, or the TUI.
 
 Unknown keys produce a warning. Invalid syntax or values stop startup rather than silently changing behavior. Override locations with `CHORETUI_CONFIG` and `CHORETUI_DATA_DIR`.
 
@@ -87,6 +96,42 @@ Default locations follow platform conventions:
 
 Use `chore doctor` to print the exact resolved paths and non-destructively diagnose configuration or database problems.
 
+## Exporting a day to kanbanTUI
+
+kanbanTUI chooses the destination board when its foreground API process starts.
+Start it for the intended default, named, or explicitly configured board; there
+is deliberately no board or datastore selector in ChoreTUI:
+
+```sh
+export KANBAN_TUI_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+kanban-tui serve-api
+# or: kanban-tui --board home serve-api --port 8765
+# or: kanban-tui --config ./home.yaml serve-api --port 8765
+```
+
+Use the same environment-variable name in ChoreTUI's `[kanban]` configuration,
+then run `chore doctor`. The doctor makes only authenticated `GET /health`; it
+never imports or changes a board. Open ChoreTUI, select any calendar day with
+the normal board keys, press `x`, verify the exact date, endpoint and eligible
+count, then confirm once. Completed and skipped occurrences are excluded. Each
+eligible occurrence is sent sequentially as one TODO task, preserving display
+order. The result view distinguishes imported tasks, safe replays, exclusions,
+and failures; use arrows or `j`/`k` to inspect long results.
+
+The compatibility contract is `kanbanTUI-board` version 1 using authenticated
+`POST /v1/board/import?mode=merge`. Merge appends an independent kanban task; it
+is not an upsert. Later completion, editing, archiving, or deletion in either
+application does not synchronize to the other. A day export is intentionally
+not atomic: earlier tasks can succeed when a later task fails.
+
+Exact retries use the same destination-scoped idempotency keys, so retrying an
+uncertain result does not duplicate a task while the kanbanTUI receipt is
+retained. For authentication, policy, conflict, storage, malformed-response, or
+offline failures, keep the result view, correct the token/server/board policy,
+run `chore doctor`, and repeat the same selected-day export. Do not change the
+configured destination between an uncertain attempt and its retry. Restart
+`kanban-tui serve-api` after changing its selected configuration.
+
 ## Backup and recovery
 
 Close ChoreTUI before copying `choretui.db`; also copy any adjacent `-wal` and `-shm` files if they exist. Keep the original database unchanged when `doctor` reports corruption, a newer schema, or an unreadable path. Restore from a verified backup to a separate location first—ChoreTUI never silently recreates or overwrites an unreadable database.
@@ -96,7 +141,7 @@ Close ChoreTUI before copying `choretui.db`; also copy any adjacent `-wal` and `
 - Single local user and local SQLite storage; no sync or accounts.
 - ISO weeks always start Monday.
 - Deleted chores are retained for history and are read-only.
-- No hard delete, history editing, occurrence move/skip, import/export, analytics, or notifications.
+- No hard delete, history editing, occurrence move/skip, chore import, bidirectional sync, analytics, or notifications.
 - Recurrence supports weekly/every-N-weeks, every-N-days, and monthly day-of-month schedules.
 
 ## Development and quality checks

@@ -1,4 +1,12 @@
-use std::{fs, process::Command};
+use std::{
+    fs,
+    io::{Read, Write},
+    net::{Ipv4Addr, SocketAddr, TcpListener},
+    process::Command,
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
 
 use choretui::{
     app::{
@@ -199,4 +207,72 @@ fn primary_workflow_survives_restart_and_passes_doctor() {
     let report = String::from_utf8_lossy(&output.stdout);
     assert!(report.contains("integrity"));
     assert!(report.contains("PASS"));
+}
+
+#[test]
+fn doctor_checks_configured_kanban_health_without_importing() {
+    let temporary = tempdir_in(std::env::current_dir().expect("working directory should exist"))
+        .expect("temporary directory should be created");
+    let config = temporary.path().join("config.toml");
+    let data_dir = temporary.path().join("data");
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("listener should bind");
+    let address = match listener.local_addr().expect("address should resolve") {
+        SocketAddr::V4(address) => address,
+        SocketAddr::V6(_) => unreachable!("test listener is IPv4"),
+    };
+    fs::write(
+        &config,
+        format!(
+            "[kanban]\nendpoint = \"http://{address}\"\ntoken_env = \"CHORETUI_DOCTOR_TOKEN\"\n"
+        ),
+    )
+    .expect("configuration should write");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("health request should connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("timeout should configure");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 512];
+        while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).expect("request should read");
+            assert!(count > 0, "request should contain headers");
+            request.extend_from_slice(&buffer[..count]);
+        }
+        sender.send(request).expect("request should be captured");
+        let body = r#"{"status":"ok"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("health response should write");
+    });
+
+    let output = Command::new(env!("CARGO_BIN_EXE_chore"))
+        .arg("doctor")
+        .env(CONFIG_ENV, &config)
+        .env(DATA_DIR_ENV, &data_dir)
+        .env("CHORETUI_DOCTOR_TOKEN", "doctor-token")
+        .output()
+        .expect("doctor should start");
+
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let request = String::from_utf8(
+        receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("health request should arrive"),
+    )
+    .expect("request should be UTF-8");
+    assert!(request.starts_with("GET /health HTTP/1.1\r\n"));
+    assert!(request.contains("\r\nAuthorization: Bearer doctor-token\r\n"));
+    assert!(!request.contains("/v1/board/import"));
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(report.contains("kanbanTUI"));
+    assert!(report.contains("no import performed"));
 }

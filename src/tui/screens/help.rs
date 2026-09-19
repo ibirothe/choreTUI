@@ -107,6 +107,10 @@ fn help_lines(context: HelpContext) -> Vec<&'static str> {
             "[ / ]             previous/next ISO week",
             "PageUp/PageDown   previous/next ISO week",
             "t                 return to current week",
+            "Export setup: start kanban-tui [--board NAME] serve-api.",
+            "Set its token env; configure [kanban] endpoint and token_env.",
+            "The server process owns the destination board; x exports once.",
+            "For failures run chore doctor, fix the cause, then retry unchanged.",
         ],
         HelpContext::Editor => vec![
             "Chore Editor:",
