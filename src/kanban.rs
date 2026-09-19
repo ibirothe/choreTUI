@@ -15,7 +15,10 @@ use serde::{Deserialize, Deserializer, de};
 use thiserror::Error;
 
 use crate::{
-    app::kanban::{KanbanGateway, KanbanImportOutcome, KanbanImportRequest, KanbanImportResult},
+    app::kanban::{
+        KanbanGateway, KanbanGatewayFailure, KanbanImportOutcome, KanbanImportRequest,
+        KanbanImportResult,
+    },
     config::KanbanConfig,
 };
 
@@ -360,6 +363,27 @@ impl KanbanGateway for KanbanClient {
         let token = self.token()?;
         self.import_with_token(request, &token)
     }
+
+    fn classify_import_error(error: &Self::Error) -> KanbanGatewayFailure {
+        match error {
+            KanbanClientError::MissingToken { .. }
+            | KanbanClientError::InvalidToken
+            | KanbanClientError::Unauthorized => KanbanGatewayFailure::Authentication,
+            KanbanClientError::ConnectionFailed | KanbanClientError::StoreUnavailable => {
+                KanbanGatewayFailure::DestinationUnavailable
+            }
+            KanbanClientError::Timeout
+            | KanbanClientError::TransportFailure
+            | KanbanClientError::ResponseTooLarge
+            | KanbanClientError::MalformedResponse
+            | KanbanClientError::ServerFailure { .. } => KanbanGatewayFailure::UncertainOutcome,
+            KanbanClientError::IdempotencyConflict => KanbanGatewayFailure::IdempotencyConflict,
+            KanbanClientError::PolicyViolation { .. } => KanbanGatewayFailure::PolicyViolation,
+            KanbanClientError::InvalidIdempotencyKey
+            | KanbanClientError::RequestTooLarge
+            | KanbanClientError::Rejected { .. } => KanbanGatewayFailure::Rejected,
+        }
+    }
 }
 
 fn validate_token(token: &str) -> Result<(), KanbanClientError> {
@@ -702,6 +726,65 @@ mod tests {
                 code: "internal_error".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn client_failures_have_stable_application_categories() {
+        let cases = [
+            (
+                KanbanClientError::MissingToken {
+                    variable: "TOKEN".to_owned(),
+                },
+                KanbanGatewayFailure::Authentication,
+            ),
+            (
+                KanbanClientError::Unauthorized,
+                KanbanGatewayFailure::Authentication,
+            ),
+            (
+                KanbanClientError::ConnectionFailed,
+                KanbanGatewayFailure::DestinationUnavailable,
+            ),
+            (
+                KanbanClientError::StoreUnavailable,
+                KanbanGatewayFailure::DestinationUnavailable,
+            ),
+            (
+                KanbanClientError::Timeout,
+                KanbanGatewayFailure::UncertainOutcome,
+            ),
+            (
+                KanbanClientError::TransportFailure,
+                KanbanGatewayFailure::UncertainOutcome,
+            ),
+            (
+                KanbanClientError::IdempotencyConflict,
+                KanbanGatewayFailure::IdempotencyConflict,
+            ),
+            (
+                KanbanClientError::PolicyViolation {
+                    rule: "task_text_limit".to_owned(),
+                    limit: Some(40),
+                    actual: Some(60),
+                    task_id: Some(1),
+                },
+                KanbanGatewayFailure::PolicyViolation,
+            ),
+            (
+                KanbanClientError::Rejected {
+                    status: 400,
+                    code: "invalid_import_format".to_owned(),
+                },
+                KanbanGatewayFailure::Rejected,
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(
+                <KanbanClient as KanbanGateway>::classify_import_error(&error),
+                expected
+            );
+        }
     }
 
     #[test]
